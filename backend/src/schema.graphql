@@ -1,0 +1,29 @@
+type Query {
+    hello: String
+}
+
+type Mutation {
+    resolveSupplier(purl: String!): Supplier
+}
+
+type Supplier {
+    name: String
+    address: Address
+    url: String
+    contact: Contact
+}
+
+type Address {
+    country: String
+    region: String
+    locality: String
+    postOfficeBoxNumber: String
+    postalCode: String
+    streetAddress: String
+}
+
+type Contact {
+    name: String
+    email: String
+    phone: String
+}
