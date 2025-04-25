@@ -19,7 +19,7 @@ export abstract class IMutation {
 export class Supplier {
     name?: Nullable<string>;
     address?: Nullable<Address>;
-    url?: Nullable<string>;
+    url?: Nullable<Nullable<string>[]>;
     contact?: Nullable<Contact>;
 }
 

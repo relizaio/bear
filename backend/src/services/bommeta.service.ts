@@ -2,27 +2,43 @@ import { Injectable } from '@nestjs/common'
 import { Supplier } from 'src/graphql'
 import { runQuery, schema } from '../utils/pgUtils'
 import { BomMeta } from 'src/model/Bommeta'
-import CDX from "@cyclonedx/cyclonedx-library"
+import CDX, { Models } from "@cyclonedx/cyclonedx-library"
 import axios, { AxiosResponse } from 'axios'
 import { PackageURL } from 'packageurl-js'
 
 const axiosClient = axios.create()
+const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
 
 @Injectable()
 export class BomMetaService {
-    async getBomMeta (uuid: string) : Promise<BomMeta> {
+    async getBomMeta (uuid: string) : Promise<BomMeta | undefined> {
+        let bommeta: BomMeta = undefined
         const queryText = `SELECT * FROM ${schema}.bommeta where uuid = $1`
         const queryParams = [uuid]
         const queryRes = await runQuery(queryText, queryParams)
+        if (queryRes.rows && queryRes.rows.length) bommeta = this.dbRowToBomMeta(queryRes.rows[0])
+        return bommeta
+    }
+
+    private dbRowToBomMeta (dbRow: any) : BomMeta {
         const bommeta : BomMeta = {
-            uuid: queryRes.rows[0].uuid,
-            createdDate: queryRes.rows[0].created_date,
-            lastUpdatedDate: queryRes.rows[0].last_updated_date,
-            ecosystem: queryRes.rows[0].ecosystem,
-            purl: queryRes.rows[0].purl,
-            supplier: queryRes.rows[0].supplier,
-            cdxSchemaVersion: queryRes.rows[0].cdx_schema_version,
+            uuid: dbRow.uuid,
+            createdDate: dbRow.created_date,
+            lastUpdatedDate: dbRow.last_updated_date,
+            ecosystem: dbRow.ecosystem,
+            purl: dbRow.purl,
+            supplier: dbRow.supplier,
+            cdxSchemaVersion: dbRow.cdx_schema_version,
         }
+        return bommeta
+    }
+
+    async getBomMetaByPurl (purl: string) : Promise<BomMeta | undefined> {
+        let bommeta: BomMeta = undefined
+        const queryText = `SELECT * FROM ${schema}.bommeta where purl = $1`
+        const queryParams = [purl]
+        const queryRes = await runQuery(queryText, queryParams)
+        if (queryRes.rows && queryRes.rows.length) bommeta = this.dbRowToBomMeta(queryRes.rows[0])
         return bommeta
     }
 
@@ -46,7 +62,15 @@ export class BomMetaService {
     }
 
     async resolveSupplierByPurl (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
-        const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaSyAs-HEkblcNuMg16zbHBKmOeLyUTG3B5F8',
+        let supplier: CDX.Models.OrganizationalEntity = undefined
+        const dbRecord = await this.getBomMetaByPurl(purl) 
+        if (dbRecord) supplier = dbRecord.supplier
+        else supplier = await this.resolveSupplierByPurlOnGemini(purl)
+        return supplier
+    }
+
+    async resolveSupplierByPurlOnGemini (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
+        const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent',
             {
                 contents: [{
                   "parts":[{"text": `can you give me only the supplier part of the CycloneDX JSON Component for ${purl} with no explanation`}]
@@ -54,15 +78,30 @@ export class BomMetaService {
             },
             {
                 headers: {
+                    'x-goog-api-key': GEMINI_API_KEY,
                     Accept: 'application/json',
                     'Content-Type': 'application/json'
                 }
             }
         )
         const respText = resp.data.candidates[0].content.parts[0].text
+        console.log(respText)
         const respTextForParse = respText.replace('```json', '').replace('```', '')
-        const parsedSupplier: CDX.Models.OrganizationalEntity = JSON.parse(respTextForParse)
-        this.createBomMeta(purl, parsedSupplier, '1.6')
+        let parsedSupplier: any = JSON.parse(respTextForParse)
+        if (parsedSupplier.supplier) parsedSupplier = parsedSupplier.supplier
+        let url = undefined
+        if (parsedSupplier.url && parsedSupplier.url.constructor === Array) {
+            url = parsedSupplier.url
+        } else if (parsedSupplier.url) {
+            url = [parsedSupplier.url]
+        }
+        const cdxSupplierProps: CDX.Models.OptionalOrganizationalEntityProperties = {
+            name: parsedSupplier.name,
+            url,
+            contact: parsedSupplier.contact
+        }
+        const cdxSupplier: CDX.Models.OrganizationalEntity = new Models.OrganizationalEntity(cdxSupplierProps)
+        this.createBomMeta(purl, cdxSupplier, '1.6')
         return parsedSupplier
     }
 
