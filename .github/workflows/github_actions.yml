@@ -1,0 +1,24 @@
+on: [push]
+
+name: Build Component Container Images And Submit Metadata To Reliza Hub
+
+permissions:
+  contents: write
+
+jobs:
+  build-bear-backend:
+    name: Build And Push BEAR Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: RelizaHub Build And Submit Backend Release
+        uses: relizaio/reliza-docker-action@2.1
+        with:
+          registry_username: ${{ secrets.DOCKER_LOGIN }}
+          registry_password: ${{ secrets.DOCKER_TOKEN }}
+          registry_host: registry.relizahub.com
+          image_namespace: registry.relizahub.com/library
+          image_name: bear-backend
+          reliza_api_id: ${{ secrets.RELIZA_BEAR_BACKEND_API_ID }}
+          reliza_api_key: ${{ secrets.RELIZA_BEAR_BACKEND_API_KEY }}
+          path: backend
+          enable_sbom: 'false'
