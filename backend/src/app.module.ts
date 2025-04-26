@@ -9,7 +9,7 @@ import { BomMetaService } from './services/bommeta.service';
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       typePaths: ['./**/*.graphql'],
-      playground: true // TODO: disable for production
+      playground: (process.env.BEAR_ENABLE_PLAYGROUND === 'true') ? true : false
     }),
   ],
   controllers: [],
