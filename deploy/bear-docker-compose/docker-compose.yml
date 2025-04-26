@@ -1,0 +1,53 @@
+services:
+  bear-backend:
+    image: registry.relizahub.com/library/bear-backend
+    ports:
+     - "8086:4002"
+    env_file:
+      - path: ./bear.env
+        required: true
+    environment:
+      - POSTGRES_HOST=bear-postgresql
+      - POSTGRES_PORT=5432
+      - POSTGRES_PASSWORD=relizaPass
+      - BEAR_ENABLE_PLAYGROUND=true
+    depends_on:
+      - bear-postgresql
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 10s
+  bear-postgresql:
+    image: postgres:17.4-alpine3.21
+    ports:
+     - "5443:5432"
+    environment:
+     - POSTGRES_PASSWORD=relizaPass
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - "bear-postgres-data:/var/lib/postgresql/data"
+  bear-postgres-init:
+    image: 'flyway/flyway:11-alpine'
+    restart: on-failure
+    depends_on:
+      - bear-postgresql
+    command:
+      [
+        '-url=jdbc:postgresql://bear-postgresql:5432/postgres',
+        '-user=postgres',
+        '-password=relizaPass',
+        '-defaultSchema=bear',
+        '-schemas=bear',
+        'migrate'
+      ]
+    volumes:
+      - ./bear-backend-migrations:/flyway/sql
+volumes:
+  bear-postgres-data:
+    driver: local 
