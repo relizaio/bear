@@ -8,6 +8,7 @@ sealed_secrets_scope: "namespace-wide"
 image:
   backEndImage: registry.relizahub.com/library/bear-backend:latest
   postgresImage: bitnami/postgresql:16.6.0
+  flywayImage: flyway/flyway:8.4.4-alpine
   pullPolicy: IfNotPresent
 
 imagePullSecrets: [ {"name":"regcred"} ]

@@ -49,3 +49,29 @@ spec:
             - name: http
               containerPort: 4002
               protocol: TCP
+      initContainers:
+      - name: bear-backend-init
+        image: "{{ .Values.image.backEndImage }}"
+        command: ["cp", "-r", "/app/migrations/.", "/flyway/sql"]
+        volumeMounts:
+        - mountPath: /flyway/sql
+          name: migrations-sql
+      - name: bear-backend-migrations
+        image: "{{ .Values.image.flywayImage }}"
+        env:
+        - name: POSTGRES_JDBC
+          value: jdbc:postgresql://{{ .Release.Name }}-postgresql:5432/postgres
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pgpassword
+              key: postgresql-password
+        command: ['/bin/sh', '-c', "/flyway/flyway -url=$POSTGRES_JDBC -user=$POSTGRES_USER -password=$POSTGRES_PASSWORD -defaultSchema=bear -schemas=bear migrate"]
+        volumeMounts:
+          - mountPath: "/flyway/sql"
+            name: migrations-sql
+      volumes:
+        - name: migrations-sql
+          emptyDir: {}
