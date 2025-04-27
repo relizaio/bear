@@ -94,6 +94,8 @@ export class BomMetaService {
             url = parsedSupplier.url
         } else if (parsedSupplier.url) {
             url = [parsedSupplier.url]
+        } else {
+            url = []
         }
         const cdxSupplierProps: CDX.Models.OptionalOrganizationalEntityProperties = {
             name: parsedSupplier.name,
