@@ -18,6 +18,10 @@ useTraefikLe: true
 traefikBehindLb: false
 leHost: bear.localhost
 
+backendService:
+  type: ClusterIP
+  port: 8085
+
 postgresql:
   image:
     registry: docker.io
