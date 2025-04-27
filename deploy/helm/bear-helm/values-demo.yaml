@@ -1,0 +1,8 @@
+create_secret_in_chart: "sealed"
+sealed_secrets_scope: "namespace-wide"
+
+projectProtocol: https
+
+useTraefikLe: true
+traefikBehindLb: false
+leHost: beardemo.rearmhq.com

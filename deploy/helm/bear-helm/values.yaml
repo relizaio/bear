@@ -1,0 +1,42 @@
+backendReplicaCount: 1
+enablePlayground: "true"
+gemini_api_key: "placeholder"
+useDefaultPostgrePass: true
+create_secret_in_chart: "regular"
+sealed_secrets_scope: "namespace-wide"
+
+image:
+  backEndImage: registry.relizahub.com/library/bear-backend:latest
+  postgresImage: bitnami/postgresql:16.6.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: [ {"name":"regcred"} ]
+
+projectProtocol: http
+
+useTraefikLe: true
+traefikBehindLb: false
+leHost: bear.localhost
+
+postgresql:
+  image:
+    registry: docker.io
+    repository: bitnami/postgresql
+    tag: 16.6.0
+    digest: ""
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+    debug: false
+  auth:
+    enablePostgresUser: true
+    postgresPassword: relizaPass # change for prod use
+  persistence:
+    size: 4Gi
+  primary:
+    resources:
+      requests:
+        memory: "300Mi"
+        cpu: "10m"
+      limits:
+        memory: "4000Mi"
+        cpu: "4000m"

@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-backend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    name: bear-backend
+    app: bear
+    {{- include "bear.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backendReplicaCount }}
+  selector:
+    matchLabels:
+      {{- include "bear.selectorLabels" . | nindent 6 }}
+      name: bear-backend-pod
+  template:
+    metadata:
+      labels:
+        {{- include "bear.selectorLabels" . | nindent 8 }}
+        name: bear-backend-pod
+        servicehook: {{ .Release.Name }}-backend
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      containers:
+        - name: {{ .Release.Name }}-backend
+          image: "{{ .Values.image.backEndImage }}"
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .Release.Name }}-postgresql
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: BEAR_ENABLE_PLAYGROUND
+              value: "{{ .Values.enablePlayground }}"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pgpassword
+                  key: postgresql-password
+            - name: BEAR_GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: bear-gemini-api-key
+                  key: BEAR_GEMINI_API_KEY
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 4002
+              protocol: TCP

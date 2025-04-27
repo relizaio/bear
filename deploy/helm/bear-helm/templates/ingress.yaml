@@ -1,0 +1,54 @@
+{{- if .Values.useTraefikLe}}
+{{- if eq .Values.projectProtocol "http" }}
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: web-ingressroute
+  namespace: {{ .Release.Namespace }}
+spec:
+  entryPoints:
+    - web
+  routes:
+  - match: Host(`{{ .Values.leHost}}`)
+    kind: Rule
+    services:
+    - name: {{ .Release.Name }}-backend-service
+      port: "http"
+{{- end }}
+---
+{{- if eq .Values.projectProtocol "https" }}
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: websecure-ingressroute
+  namespace: {{ .Values.namespace }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - match: Host(`{{ .Values.leHost}}`)
+    kind: Rule
+    services:
+    - name: {{ .Release.Name }}-backend-service
+      port: "http"
+  tls:
+    certResolver: le
+---
+{{- end }}
+{{- if .Values.traefikBehindLb}}
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: web-ingressroute
+  namespace: {{ .Release.Namespace }}
+spec:
+  entryPoints:
+    - web
+  routes:
+  - match: Host(`{{ .Values.leHost}}`)
+    kind: Rule
+    services:
+    - name: {{ .Release.Name }}-backend-service
+      port: "http"
+{{- end }}
+{{- end }}

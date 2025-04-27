@@ -22,3 +22,17 @@ jobs:
           reliza_api_key: ${{ secrets.RELIZA_BEAR_BACKEND_API_KEY }}
           path: backend
           enable_sbom: 'false'
+  build-bear-helm:
+    name: Build And Push BEAR Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: RelizaHub Build And Submit Documentation Helm metadata action
+        uses: relizaio/reliza-helm-action@2.2
+        with:
+          registry_username: ${{ secrets.DOCKER_LOGIN }}
+          registry_password: ${{ secrets.DOCKER_TOKEN }}
+          registry_host: registry.relizahub.com/library
+          helm_chart_name: bear-helm
+          reliza_api_id: ${{ secrets.RELIZA_BEAR_HELM_API_ID }}
+          reliza_api_key: ${{ secrets.RELIZA_BEAR_HELM_API_KEY }}
+          path: deploy/helm
