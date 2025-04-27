@@ -104,7 +104,7 @@ export class BomMetaService {
         }
         const cdxSupplier: CDX.Models.OrganizationalEntity = new Models.OrganizationalEntity(cdxSupplierProps)
         this.createBomMeta(purl, cdxSupplier, '1.6')
-        return parsedSupplier
+        return cdxSupplier
     }
 
 }
