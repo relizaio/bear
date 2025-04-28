@@ -7,7 +7,9 @@ import axios, { AxiosResponse } from 'axios'
 import { PackageURL } from 'packageurl-js'
 
 const axiosClient = axios.create()
+const AI_TYPE = process.env.BEAR_AI_TYPE // GEMINI or OPENAI
 const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
+const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
 
 @Injectable()
 export class BomMetaService {
@@ -65,7 +67,13 @@ export class BomMetaService {
         let supplier: CDX.Models.OrganizationalEntity = undefined
         const dbRecord = await this.getBomMetaByPurl(purl) 
         if (dbRecord) supplier = dbRecord.supplier
-        else supplier = await this.resolveSupplierByPurlOnGemini(purl)
+        else {
+            if (AI_TYPE === 'GEMINI') {
+                supplier = await this.resolveSupplierByPurlOnGemini(purl)
+            } else {
+                supplier = await this.resolveSupplierByPurlOnOpenai(purl)
+            }
+        }    
         return supplier
     }
 
@@ -86,7 +94,36 @@ export class BomMetaService {
         )
         const respText = resp.data.candidates[0].content.parts[0].text
         console.log(respText)
-        const respTextForParse = respText.replace('```json', '').replace('```', '')
+        const cdxSupplier = this.parseAiResponseIntoCDX(respText)
+        this.createBomMeta(purl, cdxSupplier, '1.6')
+        return cdxSupplier
+    }
+
+    async resolveSupplierByPurlOnOpenai (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
+        const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+            {
+                model: "gpt-4.1",
+                temperature: 0.2,
+                input: `Can you give me only the supplier part of the CycloneDX JSON Component for ${purl} with no explanation. Include url and contact details if possible.`
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            }
+        )
+        const respText = resp.data.output[0].content[0].text
+        console.log(respText)
+        const cdxSupplier = this.parseAiResponseIntoCDX(respText)
+        this.createBomMeta(purl, cdxSupplier, '1.6')
+        return cdxSupplier
+    }
+
+    parseAiResponseIntoCDX (aiResponse: string) : CDX.Models.OrganizationalEntity {
+        let respTextForParse = aiResponse.replace('```json', '').replace('```', '').trim()
+        if (respTextForParse.charAt(0) !== '{') respTextForParse = '{' + respTextForParse + '}'
         let parsedSupplier: any = JSON.parse(respTextForParse)
         if (parsedSupplier.supplier) parsedSupplier = parsedSupplier.supplier
         let url = undefined
@@ -97,13 +134,20 @@ export class BomMetaService {
         } else {
             url = []
         }
+        let contact = undefined
+        if (parsedSupplier.contact && parsedSupplier.contact.constructor === Array) {
+            contact = parsedSupplier.contact
+        } else if (parsedSupplier.contact) {
+            contact = [parsedSupplier.contact]
+        } else {
+            contact = []
+        }
         const cdxSupplierProps: CDX.Models.OptionalOrganizationalEntityProperties = {
             name: parsedSupplier.name,
             url,
-            contact: parsedSupplier.contact
+            contact
         }
         const cdxSupplier: CDX.Models.OrganizationalEntity = new Models.OrganizationalEntity(cdxSupplierProps)
-        this.createBomMeta(purl, cdxSupplier, '1.6')
         return cdxSupplier
     }
 

@@ -10,7 +10,7 @@ type Supplier {
     name: String
     address: Address
     url: [String]
-    contact: Contact
+    contact: [Contact]
 }
 
 type Address {
