@@ -3,17 +3,21 @@
 ## Run via Docker-Compose
 
 ### Pre-requisites
-You need a Google Gemini AI API Key
+You need a Google Gemini AI or an OpenAI API Key.
 
 ### Steps
 1. Git clone this repository
 2. Change directory to `deploy/bear-docker-compose`
-3. Create `bear.env` file with the following contents:
+3. Create `bear.env` file with the following contents (include only the key or keys you are using, set BEAR_AI_TYPE to either GEMINI or OPENAI accordingly):
 
 ```
 BEAR_GEMINI_API_KEY="your_actual_api_key"
+BEAR_OPENAI_API_KEY="your_actual_api_key"
+BEAR_AI_TYPE="OPENAI"
 ```
+
 Note that this file is added to .gitignore - make sure the secret is not checked in.
+
 4. Perform
 ```
 docker-compose up -d
