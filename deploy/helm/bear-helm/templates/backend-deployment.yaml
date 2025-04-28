@@ -34,6 +34,8 @@ spec:
               value: "5432"
             - name: BEAR_ENABLE_PLAYGROUND
               value: "{{ .Values.enablePlayground }}"
+            - name: BEAR_AI_TYPE
+              value: "{{ .Values.aiType }}"
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -42,8 +44,13 @@ spec:
             - name: BEAR_GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: bear-gemini-api-key
+                  name: bear-api-key
                   key: BEAR_GEMINI_API_KEY
+            - name: BEAR_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: bear-api-key
+                  key: BEAR_OPENAI_API_KEY
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
