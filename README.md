@@ -31,7 +31,7 @@ docker-compose up -d
 mutation resolveSupplier($purl: String!) {
     resolveSupplier(purl: $purl) {
         name
-    		address {
+        address {
           country
           region
           locality
