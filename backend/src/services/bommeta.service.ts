@@ -104,7 +104,7 @@ export class BomMetaService {
             {
                 model: "gpt-4.1",
                 temperature: 0.2,
-                input: `Can you give me only the supplier part of the CycloneDX JSON Component for ${purl} with no explanation. Include url and contact details if possible.`
+                input: `Can you give me only the supplier part of the CycloneDX JSON Component for ${purl} with no explanation. Include url and contact details if possible. If no real email is known do not invent one.`
             },
             {
                 headers: {
