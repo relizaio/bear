@@ -1,7 +1,9 @@
 # BEAR - BOM Enrichment and Augmentation by Reliza
 
-## Run via Docker-Compose
+## Demo Instance
+Public Demo is currently running at https://beardemo.rearmhq.com. GraphQL Playground mode is disabled there, you should use instead [ReARM CLI](https://github.com/relizaio/rearm-cli?tab=readme-ov-file#92-bom-supplier-enrichment-with-bear) to interact with it. Data obtained from Demo is licensed under Apache 2.0.
 
+## Run via Docker-Compose
 ### Pre-requisites
 You need a Google Gemini AI or an OpenAI API Key.
 
@@ -54,6 +56,8 @@ with query variables:
 {
   "purl": "pkg:npm/%40graphql-tools/schema@9.0.18#packages/schema"
 }
+
+If everything works, you can then use [ReARM CLI](https://github.com/relizaio/rearm-cli?tab=readme-ov-file#92-bom-supplier-enrichment-with-bear) to interact with BEAR instance.
 
 ## Contact Reliza
 Easiest way to contact us is through our [Discord Community](https://devopscommunity.org/) - find #rearm channel there and either post in this channel or send a direct message to maintainers.
