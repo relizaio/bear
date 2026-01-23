@@ -121,17 +121,60 @@ export class BomMetaService {
         return cdxSupplier
     }
 
-    async resolveLicenceByPurl (purl: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
+    async resolveLicenceByPurl (purlStr: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
         // Check if purl starts with Microsoft.AspNetCore - return MIT license
-        if (purl.includes('Microsoft.AspNetCore')) {
+        if (purlStr.includes('Microsoft.AspNetCore')) {
             return {
                 license: {
                     id: 'MIT'
                 }
             }
         }
-        // Default: return null for now (can be extended with AI resolution later)
-        return null
+        // For other cases, call ClearlyDefined API
+        return await this.resolveLicenceOnClearlyDefined(purlStr)
+    }
+
+    private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {
+        const mapping: Record<string, {type: string, provider: string}> = {
+            'nuget': { type: 'nuget', provider: 'nuget' },
+            'npm': { type: 'npm', provider: 'npmjs' },
+            'maven': { type: 'maven', provider: 'mavencentral' },
+            'pypi': { type: 'pypi', provider: 'pypi' },
+            'gem': { type: 'gem', provider: 'rubygems' },
+            'cargo': { type: 'crate', provider: 'cratesio' },
+            'golang': { type: 'go', provider: 'golang' },
+            'composer': { type: 'composer', provider: 'packagist' },
+            'cocoapods': { type: 'pod', provider: 'cocoapods' },
+            'github': { type: 'git', provider: 'github' },
+        }
+        return mapping[purlType] || { type: purlType, provider: purlType }
+    }
+
+    async resolveLicenceOnClearlyDefined (purlStr: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
+        try {
+            const purl = PackageURL.fromString(purlStr)
+            const { type, provider } = this.mapPurlTypeToClearlyDefined(purl.type)
+            const namespace = purl.namespace || '-'
+            const name = purl.name
+            const revision = purl.version || '-'
+            
+            const url = `https://api.clearlydefined.io/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
+            console.log(`Calling ClearlyDefined API: ${url}`)
+            
+            const resp: AxiosResponse = await axiosClient.get(url)
+            
+            if (resp.data && resp.data.licensed && resp.data.licensed.declared) {
+                return {
+                    license: {
+                        id: resp.data.licensed.declared
+                    }
+                }
+            }
+            return null
+        } catch (error) {
+            console.error('Error calling ClearlyDefined API:', error.message)
+            return null
+        }
     }
 
     parseAiResponseIntoCDX (aiResponse: string) : CDX.Models.OrganizationalEntity {
