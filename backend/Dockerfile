@@ -1,4 +1,4 @@
-FROM node:22-alpine3.21 AS builder
+FROM node:24.13.0-alpine3.23@sha256:931d7d57f8c1fd0e2179dbff7cc7da4c9dd100998bc2b32afc85142d8efbc213 AS builder
 RUN mkdir /app
 WORKDIR /app
 COPY package*.json ./
@@ -6,7 +6,7 @@ RUN npm install
 COPY ./ .
 RUN npm run build
 
-FROM node:22-alpine3.21 AS package
+FROM node:24.13.0-alpine3.23@sha256:931d7d57f8c1fd0e2179dbff7cc7da4c9dd100998bc2b32afc85142d8efbc213
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined

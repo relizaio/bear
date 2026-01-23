@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: RelizaHub Build And Submit Backend Release
-        uses: relizaio/reliza-docker-action@2.1
+        uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
         with:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: RelizaHub Build And Submit Documentation Helm metadata action
-        uses: relizaio/reliza-helm-action@2.2
+        uses: relizaio/reliza-helm-action@14604a6aec66e51fc4d188133849b203b046ed64 # v3.14
         with:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
