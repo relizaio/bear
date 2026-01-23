@@ -4,6 +4,7 @@ type Query {
 
 type Mutation {
     enrich(purl: String!): Component
+    enrichBatch(purls: [String!]!): [Component]
 }
 
 type Component {
