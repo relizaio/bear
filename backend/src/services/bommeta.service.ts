@@ -126,6 +126,14 @@ export class BomMetaService {
     }
 
     private buildComponent (purlStr: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData) {
+        let licenseChoice = null
+        if (license) {
+            if (license.expression) {
+                licenseChoice = { expression: license.expression }
+            } else {
+                licenseChoice = { license: { id: license.id, name: license.name, url: license.url } }
+            }
+        }
         return {
             type: 'library',
             name: purlStr,
@@ -134,7 +142,7 @@ export class BomMetaService {
                 name: supplier.name,
                 url: Array.from(supplier.url)
             } : null,
-            licenses: license ? [{ license }] : []
+            licenses: licenseChoice ? [licenseChoice] : []
         }
     }
 
@@ -264,7 +272,11 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.get(url)
             
             if (resp.data && resp.data.licensed && resp.data.licensed.declared) {
-                return { id: resp.data.licensed.declared }
+                const declared = resp.data.licensed.declared
+                if (declared.includes(' AND ') || declared.includes(' OR ')) {
+                    return { expression: declared }
+                }
+                return { id: declared }
             }
             return null
         } catch (error) {
@@ -341,7 +353,7 @@ export class BomMetaService {
             )
             const respText = resp.data.candidates[0].content.parts[0].text.trim()
             console.log(`Gemini license response: ${respText}`)
-            return { id: respText }
+            return this.parseLicenseResponse(respText)
         } catch (error) {
             console.error('Error calling Gemini for license:', error.message)
             return null
@@ -366,11 +378,18 @@ export class BomMetaService {
             )
             const respText = resp.data.output[0].content[0].text.trim()
             console.log(`OpenAI license response: ${respText}`)
-            return { id: respText }
+            return this.parseLicenseResponse(respText)
         } catch (error) {
             console.error('Error calling OpenAI for license:', error.message)
             return null
         }
+    }
+
+    private parseLicenseResponse (licenseStr: string) : LicenseData {
+        if (licenseStr.includes(' AND ') || licenseStr.includes(' OR ')) {
+            return { expression: licenseStr }
+        }
+        return { id: licenseStr }
     }
 
     private parseSupplierResponse (aiResponse: string) : CDX.Models.OrganizationalEntity {

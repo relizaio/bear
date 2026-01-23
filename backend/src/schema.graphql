@@ -17,6 +17,7 @@ type Component {
 
 type LicenseChoice {
     license: License
+    expression: String
 }
 
 type License {

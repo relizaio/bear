@@ -12,6 +12,7 @@ interface LicenseData {
     id?: string
     name?: string
     url?: string
+    expression?: string
 }
 
 enum SourceType {
