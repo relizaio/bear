@@ -10,6 +10,10 @@ const AI_TYPE = process.env.BEAR_AI_TYPE // GEMINI or OPENAI
 const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
 const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
 
+const SUPPLIER_NORMALIZATIONS: Record<string, {name: string, url: string}> = {
+    'microsoft': { name: 'Microsoft Corporation', url: 'https://www.microsoft.com' },
+}
+
 @Injectable()
 export class BomMetaService {
 
@@ -123,25 +127,51 @@ export class BomMetaService {
     }
 
     async resolveSupplier (purlStr: string) : Promise<CDX.Models.OrganizationalEntity> {
-        // 1. Check if purl includes Microsoft - use "Microsoft Corporation"
-        if (purlStr.includes('Microsoft')) {
-            const supplier = new CDX.Models.OrganizationalEntity({ name: 'Microsoft Corporation' })
-            supplier.url.add('https://www.microsoft.com')
-            return supplier
+        // 1. Check if purl matches any normalization pattern
+        const normalized = this.getNormalizedSupplier(purlStr)
+        if (normalized) {
+            return normalized
         }
         
         // 2. Try ClearlyDefined
         const cdSupplier = await this.resolveSupplierOnClearlyDefined(purlStr)
         if (cdSupplier) {
-            return cdSupplier
+            return this.normalizeSupplier(cdSupplier)
         }
         
         // 3. Fallback to AI
+        let supplier: CDX.Models.OrganizationalEntity
         if (AI_TYPE === 'GEMINI') {
-            return await this.resolveSupplierOnGemini(purlStr)
+            supplier = await this.resolveSupplierOnGemini(purlStr)
         } else {
-            return await this.resolveSupplierOnOpenai(purlStr)
+            supplier = await this.resolveSupplierOnOpenai(purlStr)
         }
+        return this.normalizeSupplier(supplier)
+    }
+
+    private getNormalizedSupplier (purlStr: string) : CDX.Models.OrganizationalEntity | null {
+        const purlLower = purlStr.toLowerCase()
+        for (const [key, value] of Object.entries(SUPPLIER_NORMALIZATIONS)) {
+            if (purlLower.includes(key)) {
+                const supplier = new CDX.Models.OrganizationalEntity({ name: value.name })
+                supplier.url.add(value.url)
+                return supplier
+            }
+        }
+        return null
+    }
+
+    private normalizeSupplier (supplier: CDX.Models.OrganizationalEntity) : CDX.Models.OrganizationalEntity {
+        if (!supplier || !supplier.name) return supplier
+        const nameLower = supplier.name.toLowerCase()
+        for (const [key, value] of Object.entries(SUPPLIER_NORMALIZATIONS)) {
+            if (nameLower.includes(key)) {
+                const normalized = new CDX.Models.OrganizationalEntity({ name: value.name })
+                normalized.url.add(value.url)
+                return normalized
+            }
+        }
+        return supplier
     }
 
     async resolveLicense (purlStr: string) : Promise<LicenseData> {
@@ -150,9 +180,9 @@ export class BomMetaService {
             return { id: 'MIT' }
         }
         
-        // 2. Try ClearlyDefined
+        // 2. Try ClearlyDefined (skip if contains LicenseRef-scancode)
         const cdLicense = await this.resolveLicenseOnClearlyDefined(purlStr)
-        if (cdLicense) {
+        if (cdLicense && !cdLicense.id?.includes('LicenseRef-scancode')) {
             return cdLicense
         }
         
