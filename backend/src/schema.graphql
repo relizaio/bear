@@ -3,8 +3,15 @@ type Query {
 }
 
 type Mutation {
-    resolveSupplier(purl: String!): Supplier
-    resolveLicence(purl: String!): LicenseChoice
+    enrich(purl: String!): Component
+}
+
+type Component {
+    type: String
+    name: String
+    purl: String
+    supplier: Supplier
+    licenses: [LicenseChoice]
 }
 
 type LicenseChoice {

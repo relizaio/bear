@@ -1,15 +1,15 @@
 import { Resolver, Mutation, Args } from '@nestjs/graphql'
 import { BomMetaService } from 'src/services/bommeta.service'
 
-@Resolver('LicenseChoice')
-export class LicenceResolver {
+@Resolver('Component')
+export class EnrichResolver {
     constructor(
             private bomMetaService: BomMetaService
     ) {}
 
     @Mutation()
-    async resolveLicence(@Args('purl') purl: string) {
-        return await this.bomMetaService.resolveLicenceByPurl(purl)
+    async enrich(@Args('purl') purl: string) {
+        return await this.bomMetaService.enrichByPurl(purl)
     }
 
 }

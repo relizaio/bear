@@ -1,8 +1,7 @@
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { Module } from '@nestjs/common'
 import { GraphQLModule } from '@nestjs/graphql'
-import { SupplierResolver } from './resolvers/supplier.resolver';
-import { LicenceResolver } from './resolvers/licence.resolver';
+import { EnrichResolver } from './resolvers/enrich.resolver';
 import { BomMetaService } from './services/bommeta.service';
 
 @Module({
@@ -14,6 +13,6 @@ import { BomMetaService } from './services/bommeta.service';
     }),
   ],
   controllers: [],
-  providers: [BomMetaService, SupplierResolver, LicenceResolver],
+  providers: [BomMetaService, EnrichResolver],
 })
 export class AppModule {}

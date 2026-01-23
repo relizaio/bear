@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common'
-import { Supplier } from 'src/graphql'
 import { runQuery, schema } from '../utils/pgUtils'
-import { BomMeta } from 'src/model/Bommeta'
-import CDX, { Models } from "@cyclonedx/cyclonedx-library"
+import { BomMeta, LicenseData } from 'src/model/Bommeta'
+import * as CDX from "@cyclonedx/cyclonedx-library"
 import axios, { AxiosResponse } from 'axios'
 import { PackageURL } from 'packageurl-js'
 
@@ -13,14 +12,6 @@ const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
 
 @Injectable()
 export class BomMetaService {
-    async getBomMeta (uuid: string) : Promise<BomMeta | undefined> {
-        let bommeta: BomMeta = undefined
-        const queryText = `SELECT * FROM ${schema}.bommeta where uuid = $1`
-        const queryParams = [uuid]
-        const queryRes = await runQuery(queryText, queryParams)
-        if (queryRes.rows && queryRes.rows.length) bommeta = this.dbRowToBomMeta(queryRes.rows[0])
-        return bommeta
-    }
 
     private dbRowToBomMeta (dbRow: any) : BomMeta {
         const bommeta : BomMeta = {
@@ -29,7 +20,8 @@ export class BomMetaService {
             lastUpdatedDate: dbRow.last_updated_date,
             ecosystem: dbRow.ecosystem,
             purl: dbRow.purl,
-            supplier: dbRow.supplier,
+            supplier: dbRow.supplier ? new CDX.Models.OrganizationalEntity(dbRow.supplier) : undefined,
+            license: dbRow.license,
             cdxSchemaVersion: dbRow.cdx_schema_version,
         }
         return bommeta
@@ -45,159 +37,130 @@ export class BomMetaService {
     }
 
     async saveToDb (bommeta: BomMeta) {
-        const queryText = `INSERT INTO ${schema}.bommeta (uuid, purl, ecosystem, supplier, cdx_schema_version) values ($1, $2, $3, $4, $5) RETURNING *`
-        const queryParams = [bommeta.uuid, bommeta.purl, bommeta.ecosystem, JSON.stringify(bommeta.supplier), bommeta.cdxSchemaVersion]
+        const queryText = `INSERT INTO ${schema}.bommeta (uuid, purl, ecosystem, supplier, license, cdx_schema_version) values ($1, $2, $3, $4, $5, $6) RETURNING *`
+        const supplierJson = this.supplierToJson(bommeta.supplier)
+        const queryParams = [bommeta.uuid, bommeta.purl, bommeta.ecosystem, JSON.stringify(supplierJson), JSON.stringify(bommeta.license), bommeta.cdxSchemaVersion]
         const queryRes = await runQuery(queryText, queryParams)
         return queryRes.rows[0]
     }
-    
-    async createBomMeta (purlStr: string, supplier: CDX.Models.OrganizationalEntity, cdxSchemaVersion: string) : Promise<BomMeta> {
+
+    async updateBomMeta (purl: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData) {
+        const queryText = `UPDATE ${schema}.bommeta SET supplier = $2, license = $3, last_updated_date = now() WHERE purl = $1 RETURNING *`
+        const supplierJson = this.supplierToJson(supplier)
+        const queryParams = [purl, JSON.stringify(supplierJson), JSON.stringify(license)]
+        const queryRes = await runQuery(queryText, queryParams)
+        return queryRes.rows[0]
+    }
+
+    private supplierToJson (supplier: CDX.Models.OrganizationalEntity) {
+        if (!supplier) return null
+        return {
+            name: supplier.name,
+            url: Array.from(supplier.url),
+            contact: Array.from(supplier.contact).map(c => ({ name: c.name, email: c.email, phone: c.phone }))
+        }
+    }
+
+    async createBomMeta (purlStr: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData) : Promise<BomMeta> {
         if (!purlStr) throw new TypeError("Purl is required for BEAR!")
         const purl = PackageURL.fromString(purlStr)
         const bommeta : BomMeta = new BomMeta()
-        bommeta.cdxSchemaVersion = cdxSchemaVersion
+        bommeta.cdxSchemaVersion = '1.7'
         bommeta.supplier = supplier
+        bommeta.license = license
         bommeta.ecosystem = purl.type
         bommeta.purl = purlStr
         this.saveToDb(bommeta)
         return bommeta
     }
 
-    async resolveSupplierByPurl (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
-        let supplier: CDX.Models.OrganizationalEntity = undefined
-        const dbRecord = await this.getBomMetaByPurl(purl) 
-        if (dbRecord) supplier = dbRecord.supplier
-        else {
-            if (AI_TYPE === 'GEMINI') {
-                supplier = await this.resolveSupplierByPurlOnGemini(purl)
-            } else {
-                supplier = await this.resolveSupplierByPurlOnOpenai(purl)
-            }
-        }    
-        return supplier
+    async enrichByPurl (purlStr: string) {
+        const dbRecord = await this.getBomMetaByPurl(purlStr)
+        
+        let supplier: CDX.Models.OrganizationalEntity = null
+        let license: LicenseData = null
+        
+        // Check if we have both supplier and license in DB
+        if (dbRecord && dbRecord.supplier && dbRecord.license) {
+            return this.buildComponent(purlStr, dbRecord.supplier, dbRecord.license)
+        }
+        
+        // Resolve supplier if not in DB
+        if (dbRecord && dbRecord.supplier) {
+            supplier = dbRecord.supplier
+        } else {
+            supplier = await this.resolveSupplier(purlStr)
+        }
+        
+        // Resolve license if not in DB
+        if (dbRecord && dbRecord.license) {
+            license = dbRecord.license
+        } else {
+            license = await this.resolveLicense(purlStr)
+        }
+        
+        // Save or update DB record
+        if (dbRecord) {
+            await this.updateBomMeta(purlStr, supplier, license)
+        } else {
+            await this.createBomMeta(purlStr, supplier, license)
+        }
+        
+        return this.buildComponent(purlStr, supplier, license)
     }
 
-    async resolveSupplierByPurlOnGemini (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
-        const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-            {
-                contents: [{
-                  "parts":[{"text": `can you give me only the supplier part of the CycloneDX JSON Component for ${purl} with no explanation`}]
-                }]
-            },
-            {
-                headers: {
-                    'x-goog-api-key': GEMINI_API_KEY,
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json'
-                }
-            }
-        )
-        const respText = resp.data.candidates[0].content.parts[0].text
-        console.log(respText)
-        const cdxSupplier = this.parseAiResponseIntoCDX(respText)
-        this.createBomMeta(purl, cdxSupplier, '1.6')
-        return cdxSupplier
+    private buildComponent (purlStr: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData) {
+        return {
+            type: 'library',
+            name: purlStr,
+            purl: purlStr,
+            supplier: supplier ? {
+                name: supplier.name,
+                url: Array.from(supplier.url)
+            } : null,
+            licenses: license ? [{ license }] : []
+        }
     }
 
-    async resolveSupplierByPurlOnOpenai (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
-        const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
-            {
-                model: "gpt-4.1",
-                temperature: 0.2,
-                input: `Can you give me only the supplier part of the CycloneDX JSON Component for ${purl} with no explanation. Include url and contact details if possible. If no real email is known do not invent one.`
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json'
-                }
-            }
-        )
-        const respText = resp.data.output[0].content[0].text
-        console.log(respText)
-        const cdxSupplier = this.parseAiResponseIntoCDX(respText)
-        this.createBomMeta(purl, cdxSupplier, '1.6')
-        return cdxSupplier
+    async resolveSupplier (purlStr: string) : Promise<CDX.Models.OrganizationalEntity> {
+        // 1. Check if purl includes Microsoft - use "Microsoft Corporation"
+        if (purlStr.includes('Microsoft')) {
+            const supplier = new CDX.Models.OrganizationalEntity({ name: 'Microsoft Corporation' })
+            supplier.url.add('https://www.microsoft.com')
+            return supplier
+        }
+        
+        // 2. Try ClearlyDefined
+        const cdSupplier = await this.resolveSupplierOnClearlyDefined(purlStr)
+        if (cdSupplier) {
+            return cdSupplier
+        }
+        
+        // 3. Fallback to AI
+        if (AI_TYPE === 'GEMINI') {
+            return await this.resolveSupplierOnGemini(purlStr)
+        } else {
+            return await this.resolveSupplierOnOpenai(purlStr)
+        }
     }
 
-    async resolveLicenceByPurl (purlStr: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
-        // Check if purl starts with Microsoft.AspNetCore - return MIT license
+    async resolveLicense (purlStr: string) : Promise<LicenseData> {
+        // 1. Check if purl includes Microsoft.AspNetCore - return MIT
         if (purlStr.includes('Microsoft.AspNetCore')) {
-            return {
-                license: {
-                    id: 'MIT'
-                }
-            }
+            return { id: 'MIT' }
         }
-        // For other cases, call ClearlyDefined API first
-        let licence = await this.resolveLicenceOnClearlyDefined(purlStr)
-        // If ClearlyDefined fails, fallback to AI
-        if (!licence) {
-            if (AI_TYPE === 'GEMINI') {
-                licence = await this.resolveLicenceByPurlOnGemini(purlStr)
-            } else {
-                licence = await this.resolveLicenceByPurlOnOpenai(purlStr)
-            }
+        
+        // 2. Try ClearlyDefined
+        const cdLicense = await this.resolveLicenseOnClearlyDefined(purlStr)
+        if (cdLicense) {
+            return cdLicense
         }
-        return licence
-    }
-
-    async resolveLicenceByPurlOnGemini (purl: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
-        try {
-            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-                {
-                    contents: [{
-                      "parts":[{"text": `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`}]
-                    }]
-                },
-                {
-                    headers: {
-                        'x-goog-api-key': GEMINI_API_KEY,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            const respText = resp.data.candidates[0].content.parts[0].text.trim()
-            console.log(`Gemini license response: ${respText}`)
-            return {
-                license: {
-                    id: respText
-                }
-            }
-        } catch (error) {
-            console.error('Error calling Gemini for license:', error.message)
-            return null
-        }
-    }
-
-    async resolveLicenceByPurlOnOpenai (purl: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
-        try {
-            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
-                {
-                    model: "gpt-5.2",
-                    temperature: 0.2,
-                    input: `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            const respText = resp.data.output[0].content[0].text.trim()
-            console.log(`OpenAI license response: ${respText}`)
-            return {
-                license: {
-                    id: respText
-                }
-            }
-        } catch (error) {
-            console.error('Error calling OpenAI for license:', error.message)
-            return null
+        
+        // 3. Fallback to AI
+        if (AI_TYPE === 'GEMINI') {
+            return await this.resolveLicenseOnGemini(purlStr)
+        } else {
+            return await this.resolveLicenseOnOpenai(purlStr)
         }
     }
 
@@ -217,61 +180,171 @@ export class BomMetaService {
         return mapping[purlType] || { type: purlType, provider: purlType }
     }
 
-    async resolveLicenceOnClearlyDefined (purlStr: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
+    private buildClearlyDefinedUrl (purlStr: string) : string {
+        const purl = PackageURL.fromString(purlStr)
+        const { type, provider } = this.mapPurlTypeToClearlyDefined(purl.type)
+        const namespace = purl.namespace || '-'
+        const name = purl.name
+        const revision = purl.version || '-'
+        return `https://api.clearlydefined.io/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
+    }
+
+    async resolveSupplierOnClearlyDefined (purlStr: string) : Promise<CDX.Models.OrganizationalEntity> {
         try {
-            const purl = PackageURL.fromString(purlStr)
-            const { type, provider } = this.mapPurlTypeToClearlyDefined(purl.type)
-            const namespace = purl.namespace || '-'
-            const name = purl.name
-            const revision = purl.version || '-'
-            
-            const url = `https://api.clearlydefined.io/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
-            console.log(`Calling ClearlyDefined API: ${url}`)
+            const url = this.buildClearlyDefinedUrl(purlStr)
+            console.log(`Calling ClearlyDefined API for supplier: ${url}`)
             
             const resp: AxiosResponse = await axiosClient.get(url)
             
-            if (resp.data && resp.data.licensed && resp.data.licensed.declared) {
-                return {
-                    license: {
-                        id: resp.data.licensed.declared
-                    }
+            if (resp.data && resp.data.described && resp.data.described.sourceLocation) {
+                const source = resp.data.described.sourceLocation
+                if (source.provider === 'github') {
+                    const supplier = new CDX.Models.OrganizationalEntity({ name: source.namespace })
+                    supplier.url.add(`https://github.com/${source.namespace}`)
+                    return supplier
                 }
             }
             return null
         } catch (error) {
-            console.error('Error calling ClearlyDefined API:', error.message)
+            console.error('Error calling ClearlyDefined API for supplier:', error.message)
             return null
         }
     }
 
-    parseAiResponseIntoCDX (aiResponse: string) : CDX.Models.OrganizationalEntity {
-        let respTextForParse = aiResponse.replace('```json', '').replace('```', '').trim()
-        if (respTextForParse.charAt(0) !== '{') respTextForParse = '{' + respTextForParse + '}'
-        let parsedSupplier: any = JSON.parse(respTextForParse)
-        if (parsedSupplier.supplier) parsedSupplier = parsedSupplier.supplier
-        let url = undefined
-        if (parsedSupplier.url && parsedSupplier.url.constructor === Array) {
-            url = parsedSupplier.url
-        } else if (parsedSupplier.url) {
-            url = [parsedSupplier.url]
-        } else {
-            url = []
+    async resolveLicenseOnClearlyDefined (purlStr: string) : Promise<LicenseData> {
+        try {
+            const url = this.buildClearlyDefinedUrl(purlStr)
+            console.log(`Calling ClearlyDefined API for license: ${url}`)
+            
+            const resp: AxiosResponse = await axiosClient.get(url)
+            
+            if (resp.data && resp.data.licensed && resp.data.licensed.declared) {
+                return { id: resp.data.licensed.declared }
+            }
+            return null
+        } catch (error) {
+            console.error('Error calling ClearlyDefined API for license:', error.message)
+            return null
         }
-        let contact = undefined
-        if (parsedSupplier.contact && parsedSupplier.contact.constructor === Array) {
-            contact = parsedSupplier.contact
-        } else if (parsedSupplier.contact) {
-            contact = [parsedSupplier.contact]
-        } else {
-            contact = []
+    }
+
+    async resolveSupplierOnGemini (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+                {
+                    contents: [{
+                      "parts":[{"text": `Who is the supplier/vendor organization for the software package ${purl}? Return only a JSON object with fields: name (string), url (array of strings). No explanation.`}]
+                    }]
+                },
+                {
+                    headers: {
+                        'x-goog-api-key': GEMINI_API_KEY,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.candidates[0].content.parts[0].text
+            console.log(`Gemini supplier response: ${respText}`)
+            return this.parseSupplierResponse(respText)
+        } catch (error) {
+            console.error('Error calling Gemini for supplier:', error.message)
+            return null
         }
-        const cdxSupplierProps: CDX.Models.OptionalOrganizationalEntityProperties = {
-            name: parsedSupplier.name,
-            url,
-            contact
+    }
+
+    async resolveSupplierOnOpenai (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+                {
+                    model: "gpt-5.2",
+                    temperature: 0.2,
+                    input: `Who is the supplier/vendor organization for the software package ${purl}? Return only a JSON object with fields: name (string), url (array of strings). No explanation.`
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.output[0].content[0].text
+            console.log(`OpenAI supplier response: ${respText}`)
+            return this.parseSupplierResponse(respText)
+        } catch (error) {
+            console.error('Error calling OpenAI for supplier:', error.message)
+            return null
         }
-        const cdxSupplier: CDX.Models.OrganizationalEntity = new Models.OrganizationalEntity(cdxSupplierProps)
-        return cdxSupplier
+    }
+
+    async resolveLicenseOnGemini (purl: string) : Promise<LicenseData> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+                {
+                    contents: [{
+                      "parts":[{"text": `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`}]
+                    }]
+                },
+                {
+                    headers: {
+                        'x-goog-api-key': GEMINI_API_KEY,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.candidates[0].content.parts[0].text.trim()
+            console.log(`Gemini license response: ${respText}`)
+            return { id: respText }
+        } catch (error) {
+            console.error('Error calling Gemini for license:', error.message)
+            return null
+        }
+    }
+
+    async resolveLicenseOnOpenai (purl: string) : Promise<LicenseData> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+                {
+                    model: "gpt-5.2",
+                    temperature: 0.2,
+                    input: `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.output[0].content[0].text.trim()
+            console.log(`OpenAI license response: ${respText}`)
+            return { id: respText }
+        } catch (error) {
+            console.error('Error calling OpenAI for license:', error.message)
+            return null
+        }
+    }
+
+    private parseSupplierResponse (aiResponse: string) : CDX.Models.OrganizationalEntity {
+        try {
+            let respTextForParse = aiResponse.replace('```json', '').replace('```', '').trim()
+            if (respTextForParse.charAt(0) !== '{') respTextForParse = '{' + respTextForParse + '}'
+            let parsed: any = JSON.parse(respTextForParse)
+            if (parsed.supplier) parsed = parsed.supplier
+            
+            const supplier = new CDX.Models.OrganizationalEntity({ name: parsed.name })
+            if (parsed.url) {
+                const urls = Array.isArray(parsed.url) ? parsed.url : [parsed.url]
+                urls.forEach((u: string) => supplier.url.add(u))
+            }
+            return supplier
+        } catch (error) {
+            console.error('Error parsing supplier response:', error.message)
+            return null
+        }
     }
 
 }
