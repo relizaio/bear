@@ -14,6 +14,13 @@ interface LicenseData {
     url?: string
 }
 
+enum SourceType {
+    AUTO = 'AUTO',
+    CLEARLYDEFINED = 'CLEARLYDEFINED',
+    OPENAI = 'OPENAI',
+    GEMINI = 'GEMINI'
+}
+
 class BomMeta {
     uuid: string = utils.uuidv4()
     createdDate: Date = new Date()
@@ -21,7 +28,9 @@ class BomMeta {
     purl: string = ''
     ecosystem: string = ''
     supplier: CDX.Models.OrganizationalEntity = undefined
+    supplierSource: SourceType = undefined
     license: LicenseData = undefined
+    licenseSource: SourceType = undefined
     cdxSchemaVersion: string = '1.7'
 }
 
@@ -30,5 +39,6 @@ export {
     BomMeta,
     SupplierData,
     LicenseData,
+    SourceType,
     CDX
 }

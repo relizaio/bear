@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { runQuery, schema } from '../utils/pgUtils'
-import { BomMeta, LicenseData } from 'src/model/Bommeta'
+import { BomMeta, LicenseData, SourceType } from 'src/model/Bommeta'
 import * as CDX from "@cyclonedx/cyclonedx-library"
 import axios, { AxiosResponse } from 'axios'
 import { PackageURL } from 'packageurl-js'
@@ -25,7 +25,9 @@ export class BomMetaService {
             ecosystem: dbRow.ecosystem,
             purl: dbRow.purl,
             supplier: dbRow.supplier ? new CDX.Models.OrganizationalEntity(dbRow.supplier) : undefined,
+            supplierSource: dbRow.supplier_source,
             license: dbRow.license,
+            licenseSource: dbRow.license_source,
             cdxSchemaVersion: dbRow.cdx_schema_version,
         }
         return bommeta
@@ -41,17 +43,17 @@ export class BomMetaService {
     }
 
     async saveToDb (bommeta: BomMeta) {
-        const queryText = `INSERT INTO ${schema}.bommeta (uuid, purl, ecosystem, supplier, license, cdx_schema_version) values ($1, $2, $3, $4, $5, $6) RETURNING *`
+        const queryText = `INSERT INTO ${schema}.bommeta (uuid, purl, ecosystem, supplier, supplier_source, license, license_source, cdx_schema_version) values ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`
         const supplierJson = this.supplierToJson(bommeta.supplier)
-        const queryParams = [bommeta.uuid, bommeta.purl, bommeta.ecosystem, JSON.stringify(supplierJson), JSON.stringify(bommeta.license), bommeta.cdxSchemaVersion]
+        const queryParams = [bommeta.uuid, bommeta.purl, bommeta.ecosystem, JSON.stringify(supplierJson), bommeta.supplierSource, JSON.stringify(bommeta.license), bommeta.licenseSource, bommeta.cdxSchemaVersion]
         const queryRes = await runQuery(queryText, queryParams)
         return queryRes.rows[0]
     }
 
-    async updateBomMeta (purl: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData) {
-        const queryText = `UPDATE ${schema}.bommeta SET supplier = $2, license = $3, last_updated_date = now() WHERE purl = $1 RETURNING *`
+    async updateBomMeta (purl: string, supplier: CDX.Models.OrganizationalEntity, supplierSource: SourceType, license: LicenseData, licenseSource: SourceType) {
+        const queryText = `UPDATE ${schema}.bommeta SET supplier = $2, supplier_source = $3, license = $4, license_source = $5, last_updated_date = now() WHERE purl = $1 RETURNING *`
         const supplierJson = this.supplierToJson(supplier)
-        const queryParams = [purl, JSON.stringify(supplierJson), JSON.stringify(license)]
+        const queryParams = [purl, JSON.stringify(supplierJson), supplierSource, JSON.stringify(license), licenseSource]
         const queryRes = await runQuery(queryText, queryParams)
         return queryRes.rows[0]
     }
@@ -65,13 +67,15 @@ export class BomMetaService {
         }
     }
 
-    async createBomMeta (purlStr: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData) : Promise<BomMeta> {
+    async createBomMeta (purlStr: string, supplier: CDX.Models.OrganizationalEntity, supplierSource: SourceType, license: LicenseData, licenseSource: SourceType) : Promise<BomMeta> {
         if (!purlStr) throw new TypeError("Purl is required for BEAR!")
         const purl = PackageURL.fromString(purlStr)
         const bommeta : BomMeta = new BomMeta()
         bommeta.cdxSchemaVersion = '1.7'
         bommeta.supplier = supplier
+        bommeta.supplierSource = supplierSource
         bommeta.license = license
+        bommeta.licenseSource = licenseSource
         bommeta.ecosystem = purl.type
         bommeta.purl = purlStr
         this.saveToDb(bommeta)
@@ -82,7 +86,9 @@ export class BomMetaService {
         const dbRecord = await this.getBomMetaByPurl(purlStr)
         
         let supplier: CDX.Models.OrganizationalEntity = null
+        let supplierSource: SourceType = null
         let license: LicenseData = null
+        let licenseSource: SourceType = null
         
         // Check if we have both supplier and license in DB
         if (dbRecord && dbRecord.supplier && dbRecord.license) {
@@ -92,22 +98,28 @@ export class BomMetaService {
         // Resolve supplier if not in DB
         if (dbRecord && dbRecord.supplier) {
             supplier = dbRecord.supplier
+            supplierSource = dbRecord.supplierSource
         } else {
-            supplier = await this.resolveSupplier(purlStr)
+            const result = await this.resolveSupplier(purlStr)
+            supplier = result.supplier
+            supplierSource = result.source
         }
         
         // Resolve license if not in DB
         if (dbRecord && dbRecord.license) {
             license = dbRecord.license
+            licenseSource = dbRecord.licenseSource
         } else {
-            license = await this.resolveLicense(purlStr)
+            const result = await this.resolveLicense(purlStr)
+            license = result.license
+            licenseSource = result.source
         }
         
         // Save or update DB record
         if (dbRecord) {
-            await this.updateBomMeta(purlStr, supplier, license)
+            await this.updateBomMeta(purlStr, supplier, supplierSource, license, licenseSource)
         } else {
-            await this.createBomMeta(purlStr, supplier, license)
+            await this.createBomMeta(purlStr, supplier, supplierSource, license, licenseSource)
         }
         
         return this.buildComponent(purlStr, supplier, license)
@@ -126,27 +138,30 @@ export class BomMetaService {
         }
     }
 
-    async resolveSupplier (purlStr: string) : Promise<CDX.Models.OrganizationalEntity> {
+    async resolveSupplier (purlStr: string) : Promise<{supplier: CDX.Models.OrganizationalEntity, source: SourceType}> {
         // 1. Check if purl matches any normalization pattern
         const normalized = this.getNormalizedSupplier(purlStr)
         if (normalized) {
-            return normalized
+            return { supplier: normalized, source: SourceType.AUTO }
         }
         
         // 2. Try ClearlyDefined
         const cdSupplier = await this.resolveSupplierOnClearlyDefined(purlStr)
         if (cdSupplier) {
-            return this.normalizeSupplier(cdSupplier)
+            return { supplier: this.normalizeSupplier(cdSupplier), source: SourceType.CLEARLYDEFINED }
         }
         
         // 3. Fallback to AI
         let supplier: CDX.Models.OrganizationalEntity
+        let source: SourceType
         if (AI_TYPE === 'GEMINI') {
             supplier = await this.resolveSupplierOnGemini(purlStr)
+            source = SourceType.GEMINI
         } else {
             supplier = await this.resolveSupplierOnOpenai(purlStr)
+            source = SourceType.OPENAI
         }
-        return this.normalizeSupplier(supplier)
+        return { supplier: this.normalizeSupplier(supplier), source }
     }
 
     private getNormalizedSupplier (purlStr: string) : CDX.Models.OrganizationalEntity | null {
@@ -174,23 +189,23 @@ export class BomMetaService {
         return supplier
     }
 
-    async resolveLicense (purlStr: string) : Promise<LicenseData> {
+    async resolveLicense (purlStr: string) : Promise<{license: LicenseData, source: SourceType}> {
         // 1. Check if purl includes Microsoft.AspNetCore - return MIT
         if (purlStr.includes('Microsoft.AspNetCore')) {
-            return { id: 'MIT' }
+            return { license: { id: 'MIT' }, source: SourceType.AUTO }
         }
         
         // 2. Try ClearlyDefined (skip if contains LicenseRef-scancode)
         const cdLicense = await this.resolveLicenseOnClearlyDefined(purlStr)
         if (cdLicense && !cdLicense.id?.includes('LicenseRef-scancode')) {
-            return cdLicense
+            return { license: cdLicense, source: SourceType.CLEARLYDEFINED }
         }
         
         // 3. Fallback to AI
         if (AI_TYPE === 'GEMINI') {
-            return await this.resolveLicenseOnGemini(purlStr)
+            return { license: await this.resolveLicenseOnGemini(purlStr), source: SourceType.GEMINI }
         } else {
-            return await this.resolveLicenseOnOpenai(purlStr)
+            return { license: await this.resolveLicenseOnOpenai(purlStr), source: SourceType.OPENAI }
         }
     }
 
