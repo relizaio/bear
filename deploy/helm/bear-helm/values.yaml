@@ -2,6 +2,7 @@ backendReplicaCount: 1
 enablePlayground: "true"
 gemini_api_key: "placeholder"
 openai_api_key: "placeholder"
+api_key_hash: "placeholder"
 aiType: "OPENAI"
 useDefaultPostgrePass: true
 create_secret_in_chart: "regular"

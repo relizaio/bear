@@ -1,9 +1,12 @@
 import { Resolver, Mutation, Args } from '@nestjs/graphql'
+import { UseGuards } from '@nestjs/common'
 import { BomMetaService } from 'src/services/bommeta.service'
+import { ApiKeyGuard } from 'src/guards/api-key.guard'
 
 const MAX_BATCH_SIZE = 20
 
 @Resolver('Component')
+@UseGuards(ApiKeyGuard)
 export class EnrichResolver {
     constructor(
             private bomMetaService: BomMetaService

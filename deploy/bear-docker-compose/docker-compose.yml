@@ -11,6 +11,7 @@ services:
       - POSTGRES_PORT=5432
       - POSTGRES_PASSWORD=relizaPass
       - BEAR_ENABLE_PLAYGROUND=true
+      - BEAR_API_KEY_HASH=${BEAR_API_KEY_HASH}
     depends_on:
       - bear-postgresql
     deploy:

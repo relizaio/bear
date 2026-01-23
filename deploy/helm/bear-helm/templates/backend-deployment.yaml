@@ -51,6 +51,11 @@ spec:
                 secretKeyRef:
                   name: bear-api-key
                   key: BEAR_OPENAI_API_KEY
+            - name: BEAR_API_KEY_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: bear-api-key
+                  key: BEAR_API_KEY_HASH
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

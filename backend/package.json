@@ -30,7 +30,9 @@
     "axios": "^1.8.4",
     "console-stamp": "^3.1.2",
     "graphql": "^16.10.0",
-    "pg": "^8.15.5"
+    "pg": "^8.15.5",
+    "argon2": "^0.41.1",
+    "packageurl-js": "^2.0.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.7",
