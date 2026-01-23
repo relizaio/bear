@@ -130,8 +130,75 @@ export class BomMetaService {
                 }
             }
         }
-        // For other cases, call ClearlyDefined API
-        return await this.resolveLicenceOnClearlyDefined(purlStr)
+        // For other cases, call ClearlyDefined API first
+        let licence = await this.resolveLicenceOnClearlyDefined(purlStr)
+        // If ClearlyDefined fails, fallback to AI
+        if (!licence) {
+            if (AI_TYPE === 'GEMINI') {
+                licence = await this.resolveLicenceByPurlOnGemini(purlStr)
+            } else {
+                licence = await this.resolveLicenceByPurlOnOpenai(purlStr)
+            }
+        }
+        return licence
+    }
+
+    async resolveLicenceByPurlOnGemini (purl: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+                {
+                    contents: [{
+                      "parts":[{"text": `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`}]
+                    }]
+                },
+                {
+                    headers: {
+                        'x-goog-api-key': GEMINI_API_KEY,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.candidates[0].content.parts[0].text.trim()
+            console.log(`Gemini license response: ${respText}`)
+            return {
+                license: {
+                    id: respText
+                }
+            }
+        } catch (error) {
+            console.error('Error calling Gemini for license:', error.message)
+            return null
+        }
+    }
+
+    async resolveLicenceByPurlOnOpenai (purl: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+                {
+                    model: "gpt-5.2",
+                    temperature: 0.2,
+                    input: `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.output[0].content[0].text.trim()
+            console.log(`OpenAI license response: ${respText}`)
+            return {
+                license: {
+                    id: respText
+                }
+            }
+        } catch (error) {
+            console.error('Error calling OpenAI for license:', error.message)
+            return null
+        }
     }
 
     private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {
