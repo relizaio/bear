@@ -121,6 +121,19 @@ export class BomMetaService {
         return cdxSupplier
     }
 
+    async resolveLicenceByPurl (purl: string) : Promise<{license: {id?: string, name?: string, url?: string}}> {
+        // Check if purl starts with Microsoft.AspNetCore - return MIT license
+        if (purl.includes('Microsoft.AspNetCore')) {
+            return {
+                license: {
+                    id: 'MIT'
+                }
+            }
+        }
+        // Default: return null for now (can be extended with AI resolution later)
+        return null
+    }
+
     parseAiResponseIntoCDX (aiResponse: string) : CDX.Models.OrganizationalEntity {
         let respTextForParse = aiResponse.replace('```json', '').replace('```', '').trim()
         if (respTextForParse.charAt(0) !== '{') respTextForParse = '{' + respTextForParse + '}'

@@ -14,13 +14,25 @@ export abstract class IQuery {
 
 export abstract class IMutation {
     abstract resolveSupplier(purl: string): Nullable<Supplier> | Promise<Nullable<Supplier>>;
+
+    abstract resolveLicence(purl: string): Nullable<LicenseChoice> | Promise<Nullable<LicenseChoice>>;
+}
+
+export class LicenseChoice {
+    license?: Nullable<License>;
+}
+
+export class License {
+    id?: Nullable<string>;
+    name?: Nullable<string>;
+    url?: Nullable<string>;
 }
 
 export class Supplier {
     name?: Nullable<string>;
     address?: Nullable<Address>;
     url?: Nullable<Nullable<string>[]>;
-    contact?: Nullable<Contact>;
+    contact?: Nullable<Nullable<Contact>[]>;
 }
 
 export class Address {

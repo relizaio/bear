@@ -4,6 +4,17 @@ type Query {
 
 type Mutation {
     resolveSupplier(purl: String!): Supplier
+    resolveLicence(purl: String!): LicenseChoice
+}
+
+type LicenseChoice {
+    license: License
+}
+
+type License {
+    id: String
+    name: String
+    url: String
 }
 
 type Supplier {
