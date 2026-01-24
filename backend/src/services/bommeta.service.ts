@@ -11,7 +11,7 @@ const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
 const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
 
 const SUPPLIER_NORMALIZATIONS: Record<string, {name: string, url: string}> = {
-    'microsoft': { name: 'Microsoft Corporation', url: 'https://www.microsoft.com' },
+    'microsoft': { name: 'Microsoft', url: 'https://www.microsoft.com' },
 }
 
 @Injectable()
