@@ -203,9 +203,9 @@ export class BomMetaService {
             return { license: { id: 'MIT' }, source: SourceType.AUTO }
         }
         
-        // 2. Try ClearlyDefined (skip if contains LicenseRef-scancode)
+        // 2. Try ClearlyDefined (skip if contains LicenseRef)
         const cdLicense = await this.resolveLicenseOnClearlyDefined(purlStr)
-        if (cdLicense && !cdLicense.id?.includes('LicenseRef-scancode')) {
+        if (cdLicense && !cdLicense.id?.includes('LicenseRef') && !cdLicense.expression?.includes('LicenseRef')) {
             return { license: cdLicense, source: SourceType.CLEARLYDEFINED }
         }
         
