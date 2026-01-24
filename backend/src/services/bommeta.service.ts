@@ -124,11 +124,11 @@ export class BomMetaService {
         if (needSupplierFromCD || needLicenseFromCD) {
             const cdResult = await this.resolveOnClearlyDefined(purlStr)
             
-            if (needSupplierFromCD && cdResult.supplier) {
+            if (needSupplierFromCD && cdResult.supplier && !this.isInvalidValue(cdResult.supplier.name)) {
                 supplier = this.normalizeSupplier(cdResult.supplier)
                 supplierSource = SourceType.CLEARLYDEFINED
             }
-            if (needLicenseFromCD && cdResult.license && !cdResult.license.id?.includes('LicenseRef') && !cdResult.license.expression?.includes('LicenseRef')) {
+            if (needLicenseFromCD && cdResult.license && !this.isInvalidLicense(cdResult.license)) {
                 license = cdResult.license
                 licenseSource = SourceType.CLEARLYDEFINED
             }
@@ -208,6 +208,17 @@ export class BomMetaService {
             }
         }
         return supplier
+    }
+
+    private isInvalidValue (value: string) : boolean {
+        if (!value) return true
+        const invalid = ['OTHER', 'NOASSERTION', 'NONE']
+        return invalid.includes(value.toUpperCase())
+    }
+
+    private isInvalidLicense (license: LicenseData) : boolean {
+        const checkValue = license.id || license.expression || ''
+        return this.isInvalidValue(checkValue) || checkValue.includes('LicenseRef') || checkValue.includes('OTHER')
     }
 
     private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {
