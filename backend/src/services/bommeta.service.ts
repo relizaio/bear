@@ -95,24 +95,63 @@ export class BomMetaService {
             return this.buildComponent(purlStr, dbRecord.supplier, dbRecord.license)
         }
         
-        // Resolve supplier if not in DB
-        if (dbRecord && dbRecord.supplier) {
+        // Get existing values from DB if present
+        if (dbRecord?.supplier) {
             supplier = dbRecord.supplier
             supplierSource = dbRecord.supplierSource
-        } else {
-            const result = await this.resolveSupplier(purlStr)
-            supplier = result.supplier
-            supplierSource = result.source
         }
-        
-        // Resolve license if not in DB
-        if (dbRecord && dbRecord.license) {
+        if (dbRecord?.license) {
             license = dbRecord.license
             licenseSource = dbRecord.licenseSource
-        } else {
-            const result = await this.resolveLicense(purlStr)
-            license = result.license
-            licenseSource = result.source
+        }
+        
+        // Check for AUTO resolution first (before ClearlyDefined)
+        if (!supplier) {
+            const normalized = this.getNormalizedSupplier(purlStr)
+            if (normalized) {
+                supplier = normalized
+                supplierSource = SourceType.AUTO
+            }
+        }
+        if (!license && purlStr.includes('Microsoft.AspNetCore')) {
+            license = { id: 'MIT' }
+            licenseSource = SourceType.AUTO
+        }
+        
+        // If we still need supplier or license, try ClearlyDefined (single call)
+        const needSupplierFromCD = !supplier
+        const needLicenseFromCD = !license
+        if (needSupplierFromCD || needLicenseFromCD) {
+            const cdResult = await this.resolveOnClearlyDefined(purlStr)
+            
+            if (needSupplierFromCD && cdResult.supplier) {
+                supplier = this.normalizeSupplier(cdResult.supplier)
+                supplierSource = SourceType.CLEARLYDEFINED
+            }
+            if (needLicenseFromCD && cdResult.license && !cdResult.license.id?.includes('LicenseRef') && !cdResult.license.expression?.includes('LicenseRef')) {
+                license = cdResult.license
+                licenseSource = SourceType.CLEARLYDEFINED
+            }
+        }
+        
+        // Fallback to AI for anything still missing
+        if (!supplier) {
+            if (AI_TYPE === 'GEMINI') {
+                supplier = this.normalizeSupplier(await this.resolveSupplierOnGemini(purlStr))
+                supplierSource = SourceType.GEMINI
+            } else {
+                supplier = this.normalizeSupplier(await this.resolveSupplierOnOpenai(purlStr))
+                supplierSource = SourceType.OPENAI
+            }
+        }
+        if (!license) {
+            if (AI_TYPE === 'GEMINI') {
+                license = await this.resolveLicenseOnGemini(purlStr)
+                licenseSource = SourceType.GEMINI
+            } else {
+                license = await this.resolveLicenseOnOpenai(purlStr)
+                licenseSource = SourceType.OPENAI
+            }
         }
         
         // Save or update DB record
@@ -146,32 +185,6 @@ export class BomMetaService {
         }
     }
 
-    async resolveSupplier (purlStr: string) : Promise<{supplier: CDX.Models.OrganizationalEntity, source: SourceType}> {
-        // 1. Check if purl matches any normalization pattern
-        const normalized = this.getNormalizedSupplier(purlStr)
-        if (normalized) {
-            return { supplier: normalized, source: SourceType.AUTO }
-        }
-        
-        // 2. Try ClearlyDefined
-        const cdSupplier = await this.resolveSupplierOnClearlyDefined(purlStr)
-        if (cdSupplier) {
-            return { supplier: this.normalizeSupplier(cdSupplier), source: SourceType.CLEARLYDEFINED }
-        }
-        
-        // 3. Fallback to AI
-        let supplier: CDX.Models.OrganizationalEntity
-        let source: SourceType
-        if (AI_TYPE === 'GEMINI') {
-            supplier = await this.resolveSupplierOnGemini(purlStr)
-            source = SourceType.GEMINI
-        } else {
-            supplier = await this.resolveSupplierOnOpenai(purlStr)
-            source = SourceType.OPENAI
-        }
-        return { supplier: this.normalizeSupplier(supplier), source }
-    }
-
     private getNormalizedSupplier (purlStr: string) : CDX.Models.OrganizationalEntity | null {
         const purlLower = purlStr.toLowerCase()
         for (const [key, value] of Object.entries(SUPPLIER_NORMALIZATIONS)) {
@@ -195,26 +208,6 @@ export class BomMetaService {
             }
         }
         return supplier
-    }
-
-    async resolveLicense (purlStr: string) : Promise<{license: LicenseData, source: SourceType}> {
-        // 1. Check if purl includes Microsoft.AspNetCore - return MIT
-        if (purlStr.includes('Microsoft.AspNetCore')) {
-            return { license: { id: 'MIT' }, source: SourceType.AUTO }
-        }
-        
-        // 2. Try ClearlyDefined (skip if contains LicenseRef)
-        const cdLicense = await this.resolveLicenseOnClearlyDefined(purlStr)
-        if (cdLicense && !cdLicense.id?.includes('LicenseRef') && !cdLicense.expression?.includes('LicenseRef')) {
-            return { license: cdLicense, source: SourceType.CLEARLYDEFINED }
-        }
-        
-        // 3. Fallback to AI
-        if (AI_TYPE === 'GEMINI') {
-            return { license: await this.resolveLicenseOnGemini(purlStr), source: SourceType.GEMINI }
-        } else {
-            return { license: await this.resolveLicenseOnOpenai(purlStr), source: SourceType.OPENAI }
-        }
     }
 
     private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {
@@ -242,46 +235,39 @@ export class BomMetaService {
         return `https://api.clearlydefined.io/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
     }
 
-    async resolveSupplierOnClearlyDefined (purlStr: string) : Promise<CDX.Models.OrganizationalEntity> {
+    async resolveOnClearlyDefined (purlStr: string) : Promise<{supplier: CDX.Models.OrganizationalEntity, license: LicenseData}> {
         try {
             const url = this.buildClearlyDefinedUrl(purlStr)
-            console.log(`Calling ClearlyDefined API for supplier: ${url}`)
+            console.log(`Calling ClearlyDefined API: ${url}`)
             
             const resp: AxiosResponse = await axiosClient.get(url)
             
-            if (resp.data && resp.data.described && resp.data.described.sourceLocation) {
+            let supplier: CDX.Models.OrganizationalEntity = null
+            let license: LicenseData = null
+            
+            // Extract supplier from sourceLocation
+            if (resp.data?.described?.sourceLocation) {
                 const source = resp.data.described.sourceLocation
                 if (source.provider === 'github') {
-                    const supplier = new CDX.Models.OrganizationalEntity({ name: source.namespace })
+                    supplier = new CDX.Models.OrganizationalEntity({ name: source.namespace })
                     supplier.url.add(`https://github.com/${source.namespace}`)
-                    return supplier
                 }
             }
-            return null
-        } catch (error) {
-            console.error('Error calling ClearlyDefined API for supplier:', error.message)
-            return null
-        }
-    }
-
-    async resolveLicenseOnClearlyDefined (purlStr: string) : Promise<LicenseData> {
-        try {
-            const url = this.buildClearlyDefinedUrl(purlStr)
-            console.log(`Calling ClearlyDefined API for license: ${url}`)
             
-            const resp: AxiosResponse = await axiosClient.get(url)
-            
-            if (resp.data && resp.data.licensed && resp.data.licensed.declared) {
+            // Extract license
+            if (resp.data?.licensed?.declared) {
                 const declared = resp.data.licensed.declared
                 if (declared.includes(' AND ') || declared.includes(' OR ')) {
-                    return { expression: declared }
+                    license = { expression: declared }
+                } else {
+                    license = { id: declared }
                 }
-                return { id: declared }
             }
-            return null
+            
+            return { supplier, license }
         } catch (error) {
-            console.error('Error calling ClearlyDefined API for license:', error.message)
-            return null
+            console.error('Error calling ClearlyDefined API:', error.message)
+            return { supplier: null, license: null }
         }
     }
 
