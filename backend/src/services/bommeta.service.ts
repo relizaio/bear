@@ -266,29 +266,33 @@ export class BomMetaService {
     }
 
     private async triggerHarvestAndRetry (purlStr: string, url: string) : Promise<AxiosResponse> {
-        console.log('Score is zero, triggering harvest...')
+        console.debug('Score is zero, triggering harvest...')
         const coordinates = this.buildClearlyDefinedCoordinates(purlStr)
+        const harvestUrl = `${CLEARLYDEFINED_API_URI}/harvest`
+        const harvestPayload = [{ coordinates }]
         
         try {
-            await axiosClient.post(`${CLEARLYDEFINED_API_URI}/harvest`, 
-                [{ coordinates }],
+            console.debug(`Harvest POST request: ${harvestUrl}`)
+            console.debug(`Harvest payload: ${JSON.stringify(harvestPayload)}`)
+            
+            await axiosClient.post(harvestUrl, harvestPayload, 
                 { headers: { 'Content-Type': 'application/json' } }
             )
-            console.log('Harvest triggered, waiting for processing...')
+            console.debug('Harvest triggered, waiting for processing...')
             
             // Retry up to 10 times with 2-second intervals
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < 30; i++) {
                 await this.sleep(2000)
-                const resp = await axiosClient.get(url)
+                const resp = await axiosClient.get(url + "&force=true")
                 
                 if (this.hasValidScore(resp.data)) {
-                    console.log(`Valid score received after ${i + 1} retries`)
+                    console.debug(`Valid score received after ${i + 1} retries`)
                     return resp
                 }
-                console.log(`Retry ${i + 1}/10: Still no valid score`)
+                console.debug(`Retry ${i + 1}/30: Still no valid score`)
             }
             
-            console.log('Gave up after 10 retries, fetching final data')
+            console.log('Gave up after 30 retries, fetching final data')
             return await axiosClient.get(url)
         } catch (harvestError) {
             console.error('Error triggering harvest:', harvestError.message)
