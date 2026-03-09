@@ -157,14 +157,25 @@ export class BomMetaService {
             }
         }
         
-        // 6. Resolve copyright via AI (always, since ClearlyDefined doesn't provide it)
+        // 6. Resolve copyright: NuGet API first, then AI fallback
         if (!copyright) {
-            if (AI_TYPE === 'GEMINI') {
-                copyright = await this.resolveCopyrightOnGemini(purlStr)
-                copyrightSource = SourceType.GEMINI
-            } else {
-                copyright = await this.resolveCopyrightOnOpenai(purlStr)
-                copyrightSource = SourceType.OPENAI
+            const purl = PackageURL.fromString(purlStr)
+            if (purl.type === 'nuget') {
+                copyright = await this.resolveCopyrightOnNuget(purlStr)
+                if (copyright) {
+                    copyrightSource = SourceType.NUGET
+                }
+            }
+            
+            // Fallback to AI if NuGet didn't provide copyright
+            if (!copyright) {
+                if (AI_TYPE === 'GEMINI') {
+                    copyright = await this.resolveCopyrightOnGemini(purlStr)
+                    copyrightSource = SourceType.GEMINI
+                } else {
+                    copyright = await this.resolveCopyrightOnOpenai(purlStr)
+                    copyrightSource = SourceType.OPENAI
+                }
             }
         }
         
@@ -457,6 +468,47 @@ export class BomMetaService {
             return this.parseLicenseResponse(respText)
         } catch (error) {
             console.error('Error calling OpenAI for license:', error.message)
+            return null
+        }
+    }
+
+    async resolveCopyrightOnNuget (purlStr: string) : Promise<string> {
+        try {
+            const purl = PackageURL.fromString(purlStr)
+            if (purl.type !== 'nuget') {
+                return null
+            }
+            
+            const packageName = purl.name.toLowerCase()
+            const version = purl.version
+            
+            // Step 1: Get package registration
+            const registrationUrl = `https://api.nuget.org/v3/registration5-gz-semver2/${packageName}/${version}.json`
+            const registrationResp: AxiosResponse = await axiosClient.get(registrationUrl, {
+                headers: { 'Accept-Encoding': 'gzip, deflate' }
+            })
+            
+            if (!registrationResp.data?.catalogEntry) {
+                console.log(`No catalogEntry found for NuGet package ${packageName}@${version}`)
+                return null
+            }
+            
+            // Step 2: Get catalog entry
+            const catalogUrl = registrationResp.data.catalogEntry
+            const catalogResp: AxiosResponse = await axiosClient.get(catalogUrl, {
+                headers: { 'Accept-Encoding': 'gzip, deflate' }
+            })
+            
+            const copyright = catalogResp.data?.copyright
+            if (copyright) {
+                console.log(`NuGet copyright for ${packageName}@${version}: ${copyright}`)
+                return copyright
+            }
+            
+            console.log(`No copyright found in NuGet catalog for ${packageName}@${version}`)
+            return null
+        } catch (error) {
+            console.error('Error calling NuGet API for copyright:', error.message)
             return null
         }
     }
