@@ -8,7 +8,9 @@ import { PackageURL } from 'packageurl-js'
 const axiosClient = axios.create()
 const AI_TYPE = process.env.BEAR_AI_TYPE // GEMINI or OPENAI
 const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
+const GEMINI_COPYRIGHT_MODEL = process.env.BEAR_GEMINI_COPYRIGHT_MODEL || 'gemini-2.0-flash'
 const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
+const OPENAI_COPYRIGHT_MODEL = process.env.BEAR_OPENAI_COPYRIGHT_MODEL || 'gpt-5.4'
 const CLEARLYDEFINED_API_URI = process.env.BEAR_CLEARLYDEFINED_API_URI || 'https://api.clearlydefined.io'
 const IS_PUBLIC_CLEARLYDEFINED = CLEARLYDEFINED_API_URI === 'https://api.clearlydefined.io'
 
@@ -121,10 +123,13 @@ export class BomMetaService {
             licenseSource = SourceType.AUTO
         }
         
-        // 4. If we still need supplier or license, try ClearlyDefined (single call)
+        // 4. If we still need supplier, license, or copyright, try ClearlyDefined (single call)
         const needSupplierFromCD = !supplier
         const needLicenseFromCD = !license
-        if (needSupplierFromCD || needLicenseFromCD) {
+        const needCopyrightFromCD = !copyright
+        let cdCopyrights: string[] = []
+        
+        if (needSupplierFromCD || needLicenseFromCD || needCopyrightFromCD) {
             const cdResult = await this.resolveOnClearlyDefined(purlStr)
             
             if (needSupplierFromCD && cdResult.supplier && !this.isInvalidValue(cdResult.supplier.name)) {
@@ -134,6 +139,9 @@ export class BomMetaService {
             if (needLicenseFromCD && cdResult.license && !this.isInvalidLicense(cdResult.license)) {
                 license = cdResult.license
                 licenseSource = SourceType.CLEARLYDEFINED
+            }
+            if (needCopyrightFromCD && cdResult.copyrights && cdResult.copyrights.length > 0) {
+                cdCopyrights = cdResult.copyrights
             }
         }
         
@@ -157,17 +165,36 @@ export class BomMetaService {
             }
         }
         
-        // 6. Resolve copyright: NuGet API first, then AI fallback
+        // 6. Resolve copyright: ClearlyDefined -> NuGet -> AI
         if (!copyright) {
-            const purl = PackageURL.fromString(purlStr)
-            if (purl.type === 'nuget') {
-                copyright = await this.resolveCopyrightOnNuget(purlStr)
-                if (copyright) {
-                    copyrightSource = SourceType.NUGET
+            // First, check ClearlyDefined copyrights
+            if (cdCopyrights.length === 1) {
+                // Exactly one copyright - use it directly
+                copyright = cdCopyrights[0]
+                copyrightSource = SourceType.CLEARLYDEFINED
+            } else if (cdCopyrights.length > 1) {
+                // Multiple copyrights - ask AI to select the correct one
+                if (AI_TYPE === 'GEMINI') {
+                    copyright = await this.selectCopyrightOnGemini(purlStr, cdCopyrights)
+                    copyrightSource = SourceType.CLEARLYDEFINED
+                } else {
+                    copyright = await this.selectCopyrightOnOpenai(purlStr, cdCopyrights)
+                    copyrightSource = SourceType.CLEARLYDEFINED
                 }
             }
             
-            // Fallback to AI if NuGet didn't provide copyright
+            // If ClearlyDefined didn't provide copyright, try NuGet for nuget packages
+            if (!copyright) {
+                const purl = PackageURL.fromString(purlStr)
+                if (purl.type === 'nuget') {
+                    copyright = await this.resolveCopyrightOnNuget(purlStr)
+                    if (copyright) {
+                        copyrightSource = SourceType.NUGET
+                    }
+                }
+            }
+            
+            // Final fallback to AI if no copyright found
             if (!copyright) {
                 if (AI_TYPE === 'GEMINI') {
                     copyright = await this.resolveCopyrightOnGemini(purlStr)
@@ -331,7 +358,7 @@ export class BomMetaService {
         }
     }
 
-    async resolveOnClearlyDefined (purlStr: string) : Promise<{supplier: CDX.Models.OrganizationalEntity, license: LicenseData}> {
+    async resolveOnClearlyDefined (purlStr: string) : Promise<{supplier: CDX.Models.OrganizationalEntity, license: LicenseData, copyrights: string[]}> {
         try {
             const url = this.buildClearlyDefinedUrl(purlStr)
             console.log(`Calling ClearlyDefined API: ${url}`)
@@ -345,6 +372,7 @@ export class BomMetaService {
             
             let supplier: CDX.Models.OrganizationalEntity = null
             let license: LicenseData = null
+            let copyrights: string[] = []
             
             // Extract supplier from sourceLocation
             if (resp.data?.described?.sourceLocation) {
@@ -365,10 +393,15 @@ export class BomMetaService {
                 }
             }
             
-            return { supplier, license }
+            // Extract copyrights from facets.core.attribution.parties
+            if (resp.data?.licensed?.facets?.core?.attribution?.parties) {
+                copyrights = resp.data.licensed.facets.core.attribution.parties
+            }
+            
+            return { supplier, license, copyrights }
         } catch (error) {
             console.error('Error calling ClearlyDefined API:', error.message)
-            return { supplier: null, license: null }
+            return { supplier: null, license: null, copyrights: [] }
         }
     }
 
@@ -513,9 +546,62 @@ export class BomMetaService {
         }
     }
 
+    async selectCopyrightOnGemini (purl: string, copyrights: string[]) : Promise<string> {
+        try {
+            const copyrightList = copyrights.map((c, i) => `${i + 1}. ${c}`).join('\n')
+            const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
+                {
+                    contents: [{
+                      "parts":[{"text": `Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nReturn only the exact copyright text from the list above, nothing else.`}]
+                    }]
+                },
+                {
+                    headers: {
+                        'x-goog-api-key': GEMINI_API_KEY,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.candidates[0].content.parts[0].text.trim()
+            console.log(`Gemini selected copyright: ${respText}`)
+            return respText
+        } catch (error) {
+            console.error('Error calling Gemini for copyright selection:', error.message)
+            return null
+        }
+    }
+
+    async selectCopyrightOnOpenai (purl: string, copyrights: string[]) : Promise<string> {
+        try {
+            const copyrightList = copyrights.map((c, i) => `${i + 1}. ${c}`).join('\n')
+            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+                {
+                    model: OPENAI_COPYRIGHT_MODEL,
+                    temperature: 0.2,
+                    reasoning: { effort: "medium" },
+                    input: `Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nReturn only the exact copyright text from the list above, nothing else.`
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.output[0].content[0].text.trim()
+            console.log(`OpenAI selected copyright: ${respText}`)
+            return respText
+        } catch (error) {
+            console.error('Error calling OpenAI for copyright selection:', error.message)
+            return null
+        }
+    }
+
     async resolveCopyrightOnGemini (purl: string) : Promise<string> {
         try {
-            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+            const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
                 {
                     contents: [{
                       "parts":[{"text": `What is the copyright notice for the software package ${purl}? Return only the copyright text (e.g., "Copyright (c) 2024 Company Name"), nothing else.`}]
@@ -542,8 +628,9 @@ export class BomMetaService {
         try {
             const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
                 {
-                    model: "gpt-5.2",
+                    model: OPENAI_COPYRIGHT_MODEL,
                     temperature: 0.2,
+                    reasoning: { effort: "medium" },
                     input: `What is the copyright notice for the software package ${purl}? Return only the copyright text (e.g., "Copyright (c) 2024 Company Name"), nothing else.`
                 },
                 {

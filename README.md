@@ -1,8 +1,5 @@
 # BEAR - BOM Enrichment and Augmentation by Reliza
 
-## Demo Instance
-Public Demo is currently running at https://beardemo.rearmhq.com. GraphQL Playground mode is disabled there, you should use instead [ReARM CLI](https://github.com/relizaio/rearm-cli?tab=readme-ov-file#92-bom-supplier-enrichment-with-bear) to interact with it. Data obtained from Demo is licensed under Apache 2.0.
-
 ## Run via Docker-Compose
 ### Pre-requisites
 You need a Google Gemini AI or an OpenAI API Key.
@@ -17,9 +14,14 @@ BEAR_GEMINI_API_KEY="your_actual_api_key"
 BEAR_OPENAI_API_KEY="your_actual_api_key"
 BEAR_AI_TYPE="OPENAI"
 BEAR_CLEARLYDEFINED_API_URI="https://api.clearlydefined.io"
+BEAR_GEMINI_COPYRIGHT_MODEL="gemini-2.0-flash-thinking-exp"
+BEAR_OPENAI_COPYRIGHT_MODEL="o1"
 ```
 
-Optional: Set `BEAR_CLEARLYDEFINED_API_URI` to use a custom ClearlyDefined instance. If not set, defaults to the public API at `https://api.clearlydefined.io`. When using a non-public instance, BEAR will automatically trigger the harvest endpoint for packages with zero scores and retry up to 10 times.
+Optional environment variables:
+- `BEAR_CLEARLYDEFINED_API_URI`: Use a custom ClearlyDefined instance. Defaults to `https://api.clearlydefined.io`. When using a non-public instance, BEAR will automatically trigger the harvest endpoint for packages with zero scores and retry up to 30 times.
+- `BEAR_GEMINI_COPYRIGHT_MODEL`: Gemini model for copyright selection/resolution. Defaults to `gemini-2.0-flash`. Use `gemini-2.0-flash-thinking-exp` or other thinking models for better accuracy when selecting from multiple copyright options.
+- `BEAR_OPENAI_COPYRIGHT_MODEL`: OpenAI model for copyright selection/resolution. Defaults to `gpt-5.2`. Use `o1` or other reasoning models for better accuracy when selecting from multiple copyright options.
 
 Note that this file is added to .gitignore - make sure the secret is not checked in.
 
