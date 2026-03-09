@@ -22,12 +22,22 @@ enum SourceType {
     GEMINI = 'GEMINI'
 }
 
+interface SourcesData {
+    supplier?: SourceType
+    license?: SourceType
+    copyright?: SourceType
+}
+
 class BomMeta {
     uuid: string = utils.uuidv4()
     createdDate: Date = new Date()
     lastUpdatedDate: Date = new Date()
     purl: string = ''
     ecosystem: string = ''
+    // New fields
+    cdxComponent: any = undefined
+    sources: SourcesData = undefined
+    // Legacy fields (read-only, for backward compatibility)
     supplier: CDX.Models.OrganizationalEntity = undefined
     supplierSource: SourceType = undefined
     license: LicenseData = undefined
@@ -41,5 +51,6 @@ export {
     SupplierData,
     LicenseData,
     SourceType,
+    SourcesData,
     CDX
 }

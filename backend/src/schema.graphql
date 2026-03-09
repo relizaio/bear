@@ -13,6 +13,7 @@ type Component {
     purl: String
     supplier: Supplier
     licenses: [LicenseChoice]
+    copyright: String
 }
 
 type LicenseChoice {

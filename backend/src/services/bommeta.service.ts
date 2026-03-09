@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { runQuery, schema } from '../utils/pgUtils'
-import { BomMeta, LicenseData, SourceType } from 'src/model/Bommeta'
+import { BomMeta, LicenseData, SourceType, SourcesData } from 'src/model/Bommeta'
 import * as CDX from "@cyclonedx/cyclonedx-library"
 import axios, { AxiosResponse } from 'axios'
 import { PackageURL } from 'packageurl-js'
@@ -26,6 +26,9 @@ export class BomMetaService {
             lastUpdatedDate: dbRow.last_updated_date,
             ecosystem: dbRow.ecosystem,
             purl: dbRow.purl,
+            cdxComponent: dbRow.cdx_component,
+            sources: dbRow.sources,
+            // Legacy fields (read-only)
             supplier: dbRow.supplier ? new CDX.Models.OrganizationalEntity(dbRow.supplier) : undefined,
             supplierSource: dbRow.supplier_source,
             license: dbRow.license,
@@ -45,17 +48,15 @@ export class BomMetaService {
     }
 
     async saveToDb (bommeta: BomMeta) {
-        const queryText = `INSERT INTO ${schema}.bommeta (uuid, purl, ecosystem, supplier, supplier_source, license, license_source, cdx_schema_version) values ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`
-        const supplierJson = this.supplierToJson(bommeta.supplier)
-        const queryParams = [bommeta.uuid, bommeta.purl, bommeta.ecosystem, JSON.stringify(supplierJson), bommeta.supplierSource, JSON.stringify(bommeta.license), bommeta.licenseSource, bommeta.cdxSchemaVersion]
+        const queryText = `INSERT INTO ${schema}.bommeta (uuid, purl, ecosystem, cdx_component, sources, cdx_schema_version) values ($1, $2, $3, $4, $5, $6) RETURNING *`
+        const queryParams = [bommeta.uuid, bommeta.purl, bommeta.ecosystem, JSON.stringify(bommeta.cdxComponent), JSON.stringify(bommeta.sources), bommeta.cdxSchemaVersion]
         const queryRes = await runQuery(queryText, queryParams)
         return queryRes.rows[0]
     }
 
-    async updateBomMeta (purl: string, supplier: CDX.Models.OrganizationalEntity, supplierSource: SourceType, license: LicenseData, licenseSource: SourceType) {
-        const queryText = `UPDATE ${schema}.bommeta SET supplier = $2, supplier_source = $3, license = $4, license_source = $5, last_updated_date = now() WHERE purl = $1 RETURNING *`
-        const supplierJson = this.supplierToJson(supplier)
-        const queryParams = [purl, JSON.stringify(supplierJson), supplierSource, JSON.stringify(license), licenseSource]
+    async updateBomMetaCdx (purl: string, cdxComponent: any, sources: SourcesData) {
+        const queryText = `UPDATE ${schema}.bommeta SET cdx_component = $2, sources = $3, last_updated_date = now() WHERE purl = $1 RETURNING *`
+        const queryParams = [purl, JSON.stringify(cdxComponent), JSON.stringify(sources)]
         const queryRes = await runQuery(queryText, queryParams)
         return queryRes.rows[0]
     }
@@ -69,15 +70,13 @@ export class BomMetaService {
         }
     }
 
-    async createBomMeta (purlStr: string, supplier: CDX.Models.OrganizationalEntity, supplierSource: SourceType, license: LicenseData, licenseSource: SourceType) : Promise<BomMeta> {
+    async createBomMeta (purlStr: string, cdxComponent: any, sources: SourcesData) : Promise<BomMeta> {
         if (!purlStr) throw new TypeError("Purl is required for BEAR!")
         const purl = PackageURL.fromString(purlStr)
         const bommeta : BomMeta = new BomMeta()
         bommeta.cdxSchemaVersion = '1.7'
-        bommeta.supplier = supplier
-        bommeta.supplierSource = supplierSource
-        bommeta.license = license
-        bommeta.licenseSource = licenseSource
+        bommeta.cdxComponent = cdxComponent
+        bommeta.sources = sources
         bommeta.ecosystem = purl.type
         bommeta.purl = purlStr
         this.saveToDb(bommeta)
@@ -87,17 +86,19 @@ export class BomMetaService {
     async enrichByPurl (purlStr: string) {
         const dbRecord = await this.getBomMetaByPurl(purlStr)
         
+        // 1. If cdx_component is fully populated in DB, return it directly
+        if (dbRecord?.cdxComponent) {
+            return dbRecord.cdxComponent
+        }
+        
         let supplier: CDX.Models.OrganizationalEntity = null
         let supplierSource: SourceType = null
         let license: LicenseData = null
         let licenseSource: SourceType = null
+        let copyright: string = null
+        let copyrightSource: SourceType = null
         
-        // Check if we have both supplier and license in DB
-        if (dbRecord && dbRecord.supplier && dbRecord.license) {
-            return this.buildComponent(purlStr, dbRecord.supplier, dbRecord.license)
-        }
-        
-        // Get existing values from DB if present
+        // 2. If legacy supplier + license exist, use them (copyright was not in legacy data)
         if (dbRecord?.supplier) {
             supplier = dbRecord.supplier
             supplierSource = dbRecord.supplierSource
@@ -107,7 +108,7 @@ export class BomMetaService {
             licenseSource = dbRecord.licenseSource
         }
         
-        // Check for AUTO resolution first (before ClearlyDefined)
+        // 3. Check for AUTO resolution first (before ClearlyDefined)
         if (!supplier) {
             const normalized = this.getNormalizedSupplier(purlStr)
             if (normalized) {
@@ -120,7 +121,7 @@ export class BomMetaService {
             licenseSource = SourceType.AUTO
         }
         
-        // If we still need supplier or license, try ClearlyDefined (single call)
+        // 4. If we still need supplier or license, try ClearlyDefined (single call)
         const needSupplierFromCD = !supplier
         const needLicenseFromCD = !license
         if (needSupplierFromCD || needLicenseFromCD) {
@@ -136,7 +137,7 @@ export class BomMetaService {
             }
         }
         
-        // Fallback to AI for anything still missing
+        // 5. Fallback to AI for supplier and license still missing
         if (!supplier) {
             if (AI_TYPE === 'GEMINI') {
                 supplier = this.normalizeSupplier(await this.resolveSupplierOnGemini(purlStr))
@@ -156,17 +157,35 @@ export class BomMetaService {
             }
         }
         
-        // Save or update DB record
-        if (dbRecord) {
-            await this.updateBomMeta(purlStr, supplier, supplierSource, license, licenseSource)
-        } else {
-            await this.createBomMeta(purlStr, supplier, supplierSource, license, licenseSource)
+        // 6. Resolve copyright via AI (always, since ClearlyDefined doesn't provide it)
+        if (!copyright) {
+            if (AI_TYPE === 'GEMINI') {
+                copyright = await this.resolveCopyrightOnGemini(purlStr)
+                copyrightSource = SourceType.GEMINI
+            } else {
+                copyright = await this.resolveCopyrightOnOpenai(purlStr)
+                copyrightSource = SourceType.OPENAI
+            }
         }
         
-        return this.buildComponent(purlStr, supplier, license)
+        // 7. Build component and sources, save to new columns
+        const cdxComponent = this.buildComponent(purlStr, supplier, license, copyright)
+        const sources: SourcesData = {
+            supplier: supplierSource,
+            license: licenseSource,
+            copyright: copyrightSource
+        }
+        
+        if (dbRecord) {
+            await this.updateBomMetaCdx(purlStr, cdxComponent, sources)
+        } else {
+            await this.createBomMeta(purlStr, cdxComponent, sources)
+        }
+        
+        return cdxComponent
     }
 
-    private buildComponent (purlStr: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData) {
+    private buildComponent (purlStr: string, supplier: CDX.Models.OrganizationalEntity, license: LicenseData, copyright?: string) {
         let licenseChoice = null
         if (license) {
             if (license.expression) {
@@ -183,7 +202,8 @@ export class BomMetaService {
                 name: supplier.name,
                 url: Array.from(supplier.url)
             } : null,
-            licenses: licenseChoice ? [licenseChoice] : []
+            licenses: licenseChoice ? [licenseChoice] : [],
+            copyright: copyright || null
         }
     }
 
@@ -396,7 +416,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
                 {
                     contents: [{
-                      "parts":[{"text": `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`}]
+                      "parts":[{"text": `What is the license for the software package ${purl}? Return only the SPDX license identifier, nothing else.`}]
                     }]
                 },
                 {
@@ -437,6 +457,56 @@ export class BomMetaService {
             return this.parseLicenseResponse(respText)
         } catch (error) {
             console.error('Error calling OpenAI for license:', error.message)
+            return null
+        }
+    }
+
+    async resolveCopyrightOnGemini (purl: string) : Promise<string> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+                {
+                    contents: [{
+                      "parts":[{"text": `What is the copyright notice for the software package ${purl}? Return only the copyright text (e.g., "Copyright (c) 2024 Company Name"), nothing else.`}]
+                    }]
+                },
+                {
+                    headers: {
+                        'x-goog-api-key': GEMINI_API_KEY,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.candidates[0].content.parts[0].text.trim()
+            console.log(`Gemini copyright response: ${respText}`)
+            return respText
+        } catch (error) {
+            console.error('Error calling Gemini for copyright:', error.message)
+            return null
+        }
+    }
+
+    async resolveCopyrightOnOpenai (purl: string) : Promise<string> {
+        try {
+            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+                {
+                    model: "gpt-5.2",
+                    temperature: 0.2,
+                    input: `What is the copyright notice for the software package ${purl}? Return only the copyright text (e.g., "Copyright (c) 2024 Company Name"), nothing else.`
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                }
+            )
+            const respText = resp.data.output[0].content[0].text.trim()
+            console.log(`OpenAI copyright response: ${respText}`)
+            return respText
+        } catch (error) {
+            console.error('Error calling OpenAI for copyright:', error.message)
             return null
         }
     }
