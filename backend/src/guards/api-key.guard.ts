@@ -7,6 +7,11 @@ const API_KEY_HASH = process.env.BEAR_API_KEY_HASH
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
     async canActivate(context: ExecutionContext): Promise<boolean> {
+        // Local mode - skip authentication
+        if (API_KEY_HASH === 'local') {
+            return true
+        }
+        
         const ctx = GqlExecutionContext.create(context)
         const request = ctx.getContext().req
         

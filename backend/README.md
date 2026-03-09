@@ -33,6 +33,11 @@ Set the environment variable with the generated hash:
 export BEAR_API_KEY_HASH='$argon2id$v=19$m=65536,t=3,p=4$...'
 ```
 
+For local development without authentication, use:
+```bash
+export BEAR_API_KEY_HASH='local'
+```
+
 ### 4. Start the application
 ```bash
 npm run start:dev
