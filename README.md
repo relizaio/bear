@@ -16,7 +16,10 @@ You need a Google Gemini AI or an OpenAI API Key.
 BEAR_GEMINI_API_KEY="your_actual_api_key"
 BEAR_OPENAI_API_KEY="your_actual_api_key"
 BEAR_AI_TYPE="OPENAI"
+BEAR_CLEARLYDEFINED_API_URI="https://api.clearlydefined.io"
 ```
+
+Optional: Set `BEAR_CLEARLYDEFINED_API_URI` to use a custom ClearlyDefined instance. If not set, defaults to the public API at `https://api.clearlydefined.io`. When using a non-public instance, BEAR will automatically trigger the harvest endpoint for packages with zero scores and retry up to 10 times.
 
 Note that this file is added to .gitignore - make sure the secret is not checked in.
 

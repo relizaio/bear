@@ -9,6 +9,8 @@ const axiosClient = axios.create()
 const AI_TYPE = process.env.BEAR_AI_TYPE // GEMINI or OPENAI
 const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
 const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
+const CLEARLYDEFINED_API_URI = process.env.BEAR_CLEARLYDEFINED_API_URI || 'https://api.clearlydefined.io'
+const IS_PUBLIC_CLEARLYDEFINED = CLEARLYDEFINED_API_URI === 'https://api.clearlydefined.io'
 
 const SUPPLIER_NORMALIZATIONS: Record<string, {name: string, url: string}> = {
     'microsoft': { name: 'Microsoft', url: 'https://www.microsoft.com' },
@@ -243,7 +245,55 @@ export class BomMetaService {
         const namespace = purl.namespace || '-'
         const name = purl.name
         const revision = purl.version || '-'
-        return `https://api.clearlydefined.io/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
+        return `${CLEARLYDEFINED_API_URI}/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
+    }
+
+    private buildClearlyDefinedCoordinates (purlStr: string) : string {
+        const purl = PackageURL.fromString(purlStr)
+        const { type, provider } = this.mapPurlTypeToClearlyDefined(purl.type)
+        const namespace = purl.namespace || '-'
+        const name = purl.name
+        const revision = purl.version || '-'
+        return `${type}/${provider}/${namespace}/${name}/${revision}`
+    }
+
+    private async sleep (ms: number) : Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms))
+    }
+
+    private hasValidScore (data: any) : boolean {
+        return data?.described?.score?.total > 0 || data?.licensed?.score?.total > 0
+    }
+
+    private async triggerHarvestAndRetry (purlStr: string, url: string) : Promise<AxiosResponse> {
+        console.log('Score is zero, triggering harvest...')
+        const coordinates = this.buildClearlyDefinedCoordinates(purlStr)
+        
+        try {
+            await axiosClient.post(`${CLEARLYDEFINED_API_URI}/harvest`, 
+                [{ coordinates }],
+                { headers: { 'Content-Type': 'application/json' } }
+            )
+            console.log('Harvest triggered, waiting for processing...')
+            
+            // Retry up to 10 times with 2-second intervals
+            for (let i = 0; i < 10; i++) {
+                await this.sleep(2000)
+                const resp = await axiosClient.get(url)
+                
+                if (this.hasValidScore(resp.data)) {
+                    console.log(`Valid score received after ${i + 1} retries`)
+                    return resp
+                }
+                console.log(`Retry ${i + 1}/10: Still no valid score`)
+            }
+            
+            console.log('Gave up after 10 retries, fetching final data')
+            return await axiosClient.get(url)
+        } catch (harvestError) {
+            console.error('Error triggering harvest:', harvestError.message)
+            return await axiosClient.get(url)
+        }
     }
 
     async resolveOnClearlyDefined (purlStr: string) : Promise<{supplier: CDX.Models.OrganizationalEntity, license: LicenseData}> {
@@ -251,7 +301,12 @@ export class BomMetaService {
             const url = this.buildClearlyDefinedUrl(purlStr)
             console.log(`Calling ClearlyDefined API: ${url}`)
             
-            const resp: AxiosResponse = await axiosClient.get(url)
+            let resp: AxiosResponse = await axiosClient.get(url)
+            
+            // If using non-public API and score is all zeros, trigger harvest and retry
+            if (!IS_PUBLIC_CLEARLYDEFINED && !this.hasValidScore(resp.data)) {
+                resp = await this.triggerHarvestAndRetry(purlStr, url)
+            }
             
             let supplier: CDX.Models.OrganizationalEntity = null
             let license: LicenseData = null
