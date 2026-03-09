@@ -165,31 +165,31 @@ export class BomMetaService {
             }
         }
         
-        // 6. Resolve copyright: ClearlyDefined -> NuGet -> AI
+        // 6. Resolve copyright: NuGet -> ClearlyDefined -> AI
         if (!copyright) {
-            // First, check ClearlyDefined copyrights
-            if (cdCopyrights.length === 1) {
-                // Exactly one copyright - use it directly
-                copyright = cdCopyrights[0]
-                copyrightSource = SourceType.CLEARLYDEFINED
-            } else if (cdCopyrights.length > 1) {
-                // Multiple copyrights - ask AI to select the correct one
-                if (AI_TYPE === 'GEMINI') {
-                    copyright = await this.selectCopyrightOnGemini(purlStr, cdCopyrights)
-                    copyrightSource = SourceType.CLEARLYDEFINED
-                } else {
-                    copyright = await this.selectCopyrightOnOpenai(purlStr, cdCopyrights)
-                    copyrightSource = SourceType.CLEARLYDEFINED
+            // First, try NuGet for nuget packages
+            const purl = PackageURL.fromString(purlStr)
+            if (purl.type === 'nuget') {
+                copyright = await this.resolveCopyrightOnNuget(purlStr)
+                if (copyright) {
+                    copyrightSource = SourceType.NUGET
                 }
             }
             
-            // If ClearlyDefined didn't provide copyright, try NuGet for nuget packages
+            // If NuGet didn't provide copyright, check ClearlyDefined copyrights
             if (!copyright) {
-                const purl = PackageURL.fromString(purlStr)
-                if (purl.type === 'nuget') {
-                    copyright = await this.resolveCopyrightOnNuget(purlStr)
-                    if (copyright) {
-                        copyrightSource = SourceType.NUGET
+                if (cdCopyrights.length === 1) {
+                    // Exactly one copyright - use it directly
+                    copyright = cdCopyrights[0]
+                    copyrightSource = SourceType.CLEARLYDEFINED
+                } else if (cdCopyrights.length > 1) {
+                    // Multiple copyrights - ask AI to select the correct one
+                    if (AI_TYPE === 'GEMINI') {
+                        copyright = await this.selectCopyrightOnGemini(purlStr, cdCopyrights)
+                        copyrightSource = SourceType.CLEARLYDEFINED
+                    } else {
+                        copyright = await this.selectCopyrightOnOpenai(purlStr, cdCopyrights)
+                        copyrightSource = SourceType.CLEARLYDEFINED
                     }
                 }
             }
