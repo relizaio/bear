@@ -10,5 +10,5 @@ appVersion: "0.1.0"
 
 dependencies:
 - name: postgresql
-  version: "11.9.13"
-  repository: "https://charts.bitnami.com/bitnami"
+  version: 0.1.2
+  repository: oci://registry.relizahub.com/library
