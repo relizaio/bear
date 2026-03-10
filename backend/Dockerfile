@@ -1,4 +1,4 @@
-FROM node:24.13.0-alpine3.23@sha256:931d7d57f8c1fd0e2179dbff7cc7da4c9dd100998bc2b32afc85142d8efbc213 AS builder
+FROM node:24.14.0-alpine3.23@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114 AS builder
 RUN mkdir /app
 WORKDIR /app
 COPY package*.json ./
@@ -6,7 +6,7 @@ RUN npm install
 COPY ./ .
 RUN npm run build
 
-FROM node:24.13.0-alpine3.23@sha256:931d7d57f8c1fd0e2179dbff7cc7da4c9dd100998bc2b32afc85142d8efbc213
+FROM node:24.14.0-alpine3.23@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114 AS package
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
@@ -25,7 +25,13 @@ LABEL git_commit=$GIT_COMMIT
 LABEL git_branch=$GIT_BRANCH
 LABEL ci_environment=$CI_ENV
 LABEL org.opencontainers.image.version=$VERSION
-LABEL org.opencontainers.image.url="https://github.com/relizaio/bear"
+LABEL org.opencontainers.image.vendor="Reliza Incorporated"
+LABEL org.opencontainers.image.title="BEAR Backend"
+LABEL org.opencontainers.image.source="https://github.com/relizaio/bear"
+LABEL org.opencontainers.image.license="AGPL-3.0-only"
+LABEL org.opencontainers.image.base.name="registry.relizahub.com/library/bear-backend"
+LABEL org.opencontainers.image.version=$VERSION
+LABEL org.opencontainers.image.url="https://rearmhq.com"
 
 EXPOSE 4002
 
