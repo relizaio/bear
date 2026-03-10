@@ -44,7 +44,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: pgpassword
-                  key: postgresql-password
+                  key: postgres-password
             - name: BEAR_GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -83,7 +83,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: pgpassword
-              key: postgresql-password
+              key: postgres-password
         command: ['/bin/sh', '-c', "/flyway/flyway -url=$POSTGRES_JDBC -user=$POSTGRES_USER -password=$POSTGRES_PASSWORD -defaultSchema=bear -schemas=bear migrate"]
         volumeMounts:
           - mountPath: "/flyway/sql"
