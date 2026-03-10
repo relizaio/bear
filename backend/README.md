@@ -50,7 +50,7 @@ All API requests require the `X-API-Key` header with your API key:
 curl -X POST http://localhost:4002/graphql \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-secret-api-key" \
-  -d '{"query":"mutation { enrich(purl: \"pkg:nuget/example@1.0.0\") { name } }"}'
+  -d '{"query":"mutation($purl: String!) { enrich(purl: $purl) { type name purl supplier { name url } licenses { license { id name url } expression } copyright } }", "variables": {"purl": "pkg:npm/axios@1.7.7"}}'
 ```
 
 ## Development
