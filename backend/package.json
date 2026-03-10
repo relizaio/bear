@@ -49,6 +49,11 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
+  "overrides": {
+    "@apollo/server-plugin-landing-page-graphql-playground": {
+      "@apollo/server": "$@apollo/server"
+    }
+  },
   "jest": {
     "moduleFileExtensions": [
       "js",
