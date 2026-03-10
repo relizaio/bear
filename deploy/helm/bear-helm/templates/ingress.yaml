@@ -1,6 +1,6 @@
 {{- if .Values.useTraefikLe}}
 {{- if eq .Values.projectProtocol "http" }}
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: {{ .Values.traefik_crd_api_version }}
 kind: IngressRoute
 metadata:
   name: web-ingressroute
@@ -17,7 +17,7 @@ spec:
 {{- end }}
 ---
 {{- if eq .Values.projectProtocol "https" }}
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: {{ .Values.traefik_crd_api_version }}
 kind: IngressRoute
 metadata:
   name: websecure-ingressroute
@@ -36,7 +36,7 @@ spec:
 ---
 {{- end }}
 {{- if .Values.traefikBehindLb}}
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: {{ .Values.traefik_crd_api_version }}
 kind: IngressRoute
 metadata:
   name: web-ingressroute

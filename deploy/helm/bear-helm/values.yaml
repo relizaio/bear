@@ -19,6 +19,8 @@ imagePullSecrets: [ {"name":"regcred"} ]
 
 projectProtocol: http
 
+traefik_crd_api_version: traefik.io/v1alpha1
+
 useTraefikLe: true
 traefikBehindLb: false
 leHost: bear.localhost
