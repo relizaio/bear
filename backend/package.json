@@ -31,15 +31,13 @@
     "argon2": "^0.44.0",
     "axios": "^1.13.5",
     "console-stamp": "^3.1.2",
-    "graphql": "^16.13.0",
+    "graphql": "^16.11.0",
     "packageurl-js": "^2.0.1",
     "pg": "^8.19.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.16",
-    "@nestjs/testing": "^11.1.14",
     "@types/node": "^24.10.15",
-    "@types/supertest": "^7.2.0",
     "@typescript-eslint/eslint-plugin": "^8.56.1",
     "@typescript-eslint/parser": "^8.56.1",
     "eslint": "^9.39.3",
@@ -47,11 +45,7 @@
     "eslint-plugin-prettier": "^5.5.5",
     "jest": "^30.2.0",
     "prettier": "^3.8.1",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2",
-    "supertest": "^7.2.2",
     "ts-jest": "^29.4.6",
-    "ts-morph": "^27.0.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
