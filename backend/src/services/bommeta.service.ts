@@ -578,7 +578,6 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
                 {
                     model: OPENAI_COPYRIGHT_MODEL,
-                    temperature: 0.2,
                     reasoning: { effort: "medium" },
                     input: `Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nReturn only the exact copyright text from the list above, nothing else.`
                 },
@@ -590,7 +589,13 @@ export class BomMetaService {
                     }
                 }
             )
-            const respText = resp.data.output[0].content[0].text.trim()
+            // Find the message object in the output array (skip reasoning objects)
+            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
+            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
+                console.error('No message content found in OpenAI response')
+                return null
+            }
+            const respText = messageOutput.content[0].text.trim()
             console.log(`OpenAI selected copyright: ${respText}`)
             return respText
         } catch (error) {
@@ -629,7 +634,6 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
                 {
                     model: OPENAI_COPYRIGHT_MODEL,
-                    temperature: 0.2,
                     reasoning: { effort: "medium" },
                     input: `What is the copyright notice for the software package ${purl}? Return only the copyright text (e.g., "Copyright (c) 2024 Company Name"), nothing else.`
                 },
@@ -641,7 +645,13 @@ export class BomMetaService {
                     }
                 }
             )
-            const respText = resp.data.output[0].content[0].text.trim()
+            // Find the message object in the output array (skip reasoning objects)
+            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
+            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
+                console.error('No message content found in OpenAI response')
+                return null
+            }
+            const respText = messageOutput.content[0].text.trim()
             console.log(`OpenAI copyright response: ${respText}`)
             return respText
         } catch (error) {
