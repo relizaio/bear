@@ -2,37 +2,46 @@ on: [push]
 
 name: Build Component Container Images And Submit Metadata To Reliza Hub
 
-permissions:
-  contents: write
-
 jobs:
   build-bear-backend:
+    permissions:
+      contents: read
+      id-token: write
     name: Build And Push BEAR Backend
     runs-on: ubuntu-latest
     steps:
-      - name: RelizaHub Build And Submit Backend Release
-        uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
+      - name: Build And Submit BEAR Backend Release to ReARM
+        uses: relizaio/rearm-docker-action@5038cf24067c7a71400b633819c3eb97b17aa5c1 # v1.8.0
         with:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
           registry_host: registry.relizahub.com
           image_namespace: registry.relizahub.com/library
           image_name: bear-backend
-          reliza_api_id: ${{ secrets.RELIZA_BEAR_BACKEND_API_ID }}
-          reliza_api_key: ${{ secrets.RELIZA_BEAR_BACKEND_API_KEY }}
+          rearm_api_id: ${{ secrets.RELIZA_BEAR_BACKEND_API_ID }}
+          rearm_api_key: ${{ secrets.RELIZA_BEAR_BACKEND_API_KEY }}
+          rearm_api_url: https://reliza.rearmhq.com
           path: backend
-          enable_sbom: 'false'
+          enable_sbom: true
+          source_code_sbom_type: npm
+          enable_public_cosign_sigstore: true
   build-bear-helm:
+    permissions:
+      contents: write
+      id-token: write
     name: Build And Push BEAR Helm Chart
     runs-on: ubuntu-latest
     steps:
-      - name: RelizaHub Build And Submit Documentation Helm metadata action
-        uses: relizaio/reliza-helm-action@14604a6aec66e51fc4d188133849b203b046ed64 # v3.14
+      - name: Build And Submit BEAR Helm Chart to ReARM
+        uses: relizaio/rearm-helm-action@176f1804ec0bc92dee2bb625f7b2248ad089af62 # v1.5.0
         with:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
           registry_host: registry.relizahub.com/library
           helm_chart_name: bear-helm
-          reliza_api_id: ${{ secrets.RELIZA_BEAR_HELM_API_ID }}
-          reliza_api_key: ${{ secrets.RELIZA_BEAR_HELM_API_KEY }}
-          path: deploy/helm
+          rearm_api_id: ${{ secrets.RELIZA_BEAR_HELM_API_ID }}
+          rearm_api_key: ${{ secrets.RELIZA_BEAR_HELM_API_KEY }}
+          rearm_api_url: https://reliza.rearmhq.com
+          path: deploy/helm/bear-helm
+          enable_sbom: true
+          enable_public_cosign_sigstore: true
