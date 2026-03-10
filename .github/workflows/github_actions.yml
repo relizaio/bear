@@ -38,7 +38,7 @@ jobs:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
           registry_host: registry.relizahub.com/library
-          helm_chart_name: bear-helm
+          helm_chart_name: bear
           rearm_api_id: ${{ secrets.RELIZA_BEAR_HELM_API_ID }}
           rearm_api_key: ${{ secrets.RELIZA_BEAR_HELM_API_KEY }}
           rearm_api_url: https://reliza.rearmhq.com
