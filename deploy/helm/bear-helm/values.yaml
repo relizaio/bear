@@ -4,14 +4,15 @@ gemini_api_key: "placeholder"
 openai_api_key: "placeholder"
 api_key_hash: "placeholder"
 aiType: "OPENAI"
+clearlyDefinedApiUri: ""
 useDefaultPostgrePass: true
 create_secret_in_chart: "regular"
 sealed_secrets_scope: "namespace-wide"
 
 image:
   backEndImage: registry.relizahub.com/library/bear-backend:latest
-  postgresImage: bitnami/postgresql:16.6.0
-  flywayImage: flyway/flyway:8.4.4-alpine
+  postgresImage: registry.relizahub.com/library/rearm-postgres:0.1.2@sha256:1d2b05e8662eb69bea12a04e91520e7f364e1ee3696a8a9feb0251c14b0f5950
+  flywayImage: docker.io/redgate/flyway:11.14.0-alpine@sha256:19a1178e519f9c4448956bb7a7d7c52610e6c46503a5f752d13f04120092c45d
   pullPolicy: IfNotPresent
 
 imagePullSecrets: [ {"name":"regcred"} ]
@@ -28,10 +29,10 @@ backendService:
 
 postgresql:
   image:
-    registry: docker.io
-    repository: bitnami/postgresql
-    tag: 16.6.0
-    digest: ""
+    registry: registry.relizahub.com
+    repository: library/rearm-postgres
+    tag: 0.1.2
+    digest: "@sha256:1d2b05e8662eb69bea12a04e91520e7f364e1ee3696a8a9feb0251c14b0f5950"
     pullPolicy: IfNotPresent
     pullSecrets: []
     debug: false
@@ -39,8 +40,9 @@ postgresql:
     enablePostgresUser: true
     postgresPassword: relizaPass # change for prod use
   persistence:
-    size: 4Gi
+    size: 30Gi
   primary:
+    resourcesPreset: "medium"
     resources:
       requests:
         memory: "300Mi"
