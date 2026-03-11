@@ -155,22 +155,12 @@ export class BomMetaService {
         
         // 5. Fallback to AI for supplier and license still missing
         if (!supplier) {
-            if (AI_TYPE === 'GEMINI') {
-                supplier = this.normalizeSupplier(await this.resolveSupplierOnGemini(purlStr))
-                supplierSource = SourceType.GEMINI
-            } else {
-                supplier = this.normalizeSupplier(await this.resolveSupplierOnOpenai(purlStr))
-                supplierSource = SourceType.OPENAI
-            }
+            supplier = this.normalizeSupplier(await this.resolveSupplier(purlStr))
+            supplierSource = AI_TYPE === 'GEMINI' ? SourceType.GEMINI : SourceType.OPENAI
         }
         if (!license) {
-            if (AI_TYPE === 'GEMINI') {
-                license = await this.resolveLicenseOnGemini(purlStr)
-                licenseSource = SourceType.GEMINI
-            } else {
-                license = await this.resolveLicenseOnOpenai(purlStr)
-                licenseSource = SourceType.OPENAI
-            }
+            license = await this.resolveLicense(purlStr)
+            licenseSource = AI_TYPE === 'GEMINI' ? SourceType.GEMINI : SourceType.OPENAI
         }
         
         // 6. Resolve copyright: NuGet -> ClearlyDefined -> AI
@@ -192,25 +182,15 @@ export class BomMetaService {
                     copyrightSource = SourceType.CLEARLYDEFINED
                 } else if (cdCopyrights.length > 1) {
                     // Multiple copyrights - ask AI to select the correct one
-                    if (AI_TYPE === 'GEMINI') {
-                        copyright = await this.selectCopyrightOnGemini(purlStr, cdCopyrights)
-                        copyrightSource = SourceType.CLEARLYDEFINED
-                    } else {
-                        copyright = await this.selectCopyrightOnOpenai(purlStr, cdCopyrights)
-                        copyrightSource = SourceType.CLEARLYDEFINED
-                    }
+                    copyright = await this.selectCopyright(purlStr, cdCopyrights)
+                    copyrightSource = SourceType.CLEARLYDEFINED
                 }
             }
             
             // Final fallback to AI if no copyright found
             if (!copyright) {
-                if (AI_TYPE === 'GEMINI') {
-                    copyright = await this.resolveCopyrightOnGemini(purlStr)
-                    copyrightSource = SourceType.GEMINI
-                } else {
-                    copyright = await this.resolveCopyrightOnOpenai(purlStr)
-                    copyrightSource = SourceType.OPENAI
-                }
+                copyright = await this.resolveCopyright(purlStr)
+                copyrightSource = AI_TYPE === 'GEMINI' ? SourceType.GEMINI : SourceType.OPENAI
             }
         }
         
@@ -456,130 +436,85 @@ export class BomMetaService {
         }
     }
 
-    async resolveSupplierOnGemini (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
-        try {
-            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-                {
-                    contents: [{
-                      "parts":[{"text": AI_PROMPTS.supplier(purl)}]
-                    }]
-                },
-                {
-                    headers: {
-                        'x-goog-api-key': GEMINI_API_KEY,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
+    private async callGemini (prompt: string, model?: string) : Promise<string> {
+        const geminiModel = model || 'gemini-2.0-flash'
+        const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
+            {
+                contents: [{
+                  "parts":[{"text": prompt}]
+                }]
+            },
+            {
+                headers: {
+                    'x-goog-api-key': GEMINI_API_KEY,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json'
                 }
-            )
-            const respText = resp.data.candidates[0].content.parts[0].text.trim()
-            console.log(`Gemini supplier response: ${respText}`)
-            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
+            }
+        )
+        return resp.data.candidates[0].content.parts[0].text.trim()
+    }
+
+    private async callOpenai (prompt: string, model?: string, reasoning?: { effort: string }) : Promise<string> {
+        const openaiModel = model || 'gpt-5.2'
+        const body: any = { model: openaiModel, input: prompt }
+        if (reasoning) {
+            body.reasoning = reasoning
+        } else {
+            body.temperature = 0.2
+        }
+        const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+            body,
+            {
+                headers: {
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            }
+        )
+        // Find the message object in the output array (skip reasoning objects)
+        const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
+        if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
+            throw new Error('No message content found in OpenAI response')
+        }
+        return messageOutput.content[0].text.trim()
+    }
+
+    private async callAi (prompt: string, model?: string, reasoning?: { effort: string }) : Promise<string> {
+        if (AI_TYPE === 'GEMINI') {
+            return this.callGemini(prompt, model)
+        } else {
+            return this.callOpenai(prompt, model, reasoning)
+        }
+    }
+
+    async resolveSupplier (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
+        try {
+            const respText = await this.callAi(AI_PROMPTS.supplier(purl))
+            console.log(`AI supplier response: ${respText}`)
+            if (this.isInvalidCopyrightResponse(respText)) {
                 console.log('AI response indicates it cannot determine supplier, returning null')
                 return null
             }
             return this.parseSupplierResponse(respText)
         } catch (error) {
-            console.error('Error calling Gemini for supplier:', error.message)
+            console.error('Error calling AI for supplier:', error.message)
             return null
         }
     }
 
-    async resolveSupplierOnOpenai (purl: string) : Promise<CDX.Models.OrganizationalEntity> {
+    async resolveLicense (purl: string) : Promise<LicenseData> {
         try {
-            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
-                {
-                    model: "gpt-5.2",
-                    temperature: 0.2,
-                    input: AI_PROMPTS.supplier(purl)
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            // Find the message object in the output array (skip reasoning objects)
-            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
-            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
-                console.error('No message content found in OpenAI response')
-                return null
-            }
-            const respText = messageOutput.content[0].text.trim()
-            console.log(`OpenAI supplier response: ${respText}`)
-            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine supplier, returning null')
-                return null
-            }
-            return this.parseSupplierResponse(respText)
-        } catch (error) {
-            console.error('Error calling OpenAI for supplier:', error.message)
-            return null
-        }
-    }
-
-    async resolveLicenseOnGemini (purl: string) : Promise<LicenseData> {
-        try {
-            const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-                {
-                    contents: [{
-                      "parts":[{"text": AI_PROMPTS.license(purl)}]
-                    }]
-                },
-                {
-                    headers: {
-                        'x-goog-api-key': GEMINI_API_KEY,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            const respText = resp.data.candidates[0].content.parts[0].text.trim()
-            console.log(`Gemini license response: ${respText}`)
-            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
+            const respText = await this.callAi(AI_PROMPTS.license(purl))
+            console.log(`AI license response: ${respText}`)
+            if (this.isInvalidCopyrightResponse(respText)) {
                 console.log('AI response indicates it cannot determine license, returning null')
                 return null
             }
             return this.parseLicenseResponse(respText)
         } catch (error) {
-            console.error('Error calling Gemini for license:', error.message)
-            return null
-        }
-    }
-
-    async resolveLicenseOnOpenai (purl: string) : Promise<LicenseData> {
-        try {
-            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
-                {
-                    model: "gpt-5.2",
-                    temperature: 0.2,
-                    input: AI_PROMPTS.license(purl)
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            // Find the message object in the output array (skip reasoning objects)
-            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
-            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
-                console.error('No message content found in OpenAI response')
-                return null
-            }
-            const respText = messageOutput.content[0].text.trim()
-            console.log(`OpenAI license response: ${respText}`)
-            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine license, returning null')
-                return null
-            }
-            return this.parseLicenseResponse(respText)
-        } catch (error) {
-            console.error('Error calling OpenAI for license:', error.message)
+            console.error('Error calling AI for license:', error.message)
             return null
         }
     }
@@ -625,156 +560,45 @@ export class BomMetaService {
         }
     }
 
-    async selectCopyrightOnGemini (purl: string, copyrights: string[]) : Promise<string> {
+    async selectCopyright (purl: string, copyrights: string[]) : Promise<string> {
         try {
             const copyrightList = copyrights.map((c, i) => `${i + 1}. ${c}`).join('\n')
-            const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
-                {
-                    contents: [{
-                      "parts":[{"text": AI_PROMPTS.copyrightSelect(purl, copyrightList)}]
-                    }]
-                },
-                {
-                    headers: {
-                        'x-goog-api-key': GEMINI_API_KEY,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            const respText = resp.data.candidates[0].content.parts[0].text.trim()
-            console.log(`Gemini selected copyright: ${respText}`)
+            const copyrightModel = AI_TYPE === 'GEMINI' ? GEMINI_COPYRIGHT_MODEL : OPENAI_COPYRIGHT_MODEL
+            const respText = await this.callAi(AI_PROMPTS.copyrightSelect(purl, copyrightList), copyrightModel, { effort: "medium" })
+            console.log(`AI selected copyright: ${respText}`)
             // If response contains multiple lines, return null
             if (respText.includes('\n')) {
                 console.log('Copyright response contains multiple lines, returning null')
                 return null
             }
-            // Reject invalid responses where AI says it can't determine
             if (this.isInvalidCopyrightResponse(respText)) {
                 console.log('AI response indicates it cannot determine copyright, returning null')
                 return null
             }
             return respText
         } catch (error) {
-            console.error('Error calling Gemini for copyright selection:', error.message)
+            console.error('Error calling AI for copyright selection:', error.message)
             return null
         }
     }
 
-    async selectCopyrightOnOpenai (purl: string, copyrights: string[]) : Promise<string> {
+    async resolveCopyright (purl: string) : Promise<string> {
         try {
-            const copyrightList = copyrights.map((c, i) => `${i + 1}. ${c}`).join('\n')
-            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
-                {
-                    model: OPENAI_COPYRIGHT_MODEL,
-                    reasoning: { effort: "medium" },
-                    input: AI_PROMPTS.copyrightSelect(purl, copyrightList)
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            // Find the message object in the output array (skip reasoning objects)
-            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
-            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
-                console.error('No message content found in OpenAI response')
-                return null
-            }
-            const respText = messageOutput.content[0].text.trim()
-            console.log(`OpenAI selected copyright: ${respText}`)
+            const copyrightModel = AI_TYPE === 'GEMINI' ? GEMINI_COPYRIGHT_MODEL : OPENAI_COPYRIGHT_MODEL
+            const respText = await this.callAi(AI_PROMPTS.copyrightResolve(purl), copyrightModel, { effort: "medium" })
+            console.log(`AI copyright response: ${respText}`)
             // If response contains multiple lines, return null
             if (respText.includes('\n')) {
                 console.log('Copyright response contains multiple lines, returning null')
                 return null
             }
-            // Reject invalid responses where AI says it can't determine
             if (this.isInvalidCopyrightResponse(respText)) {
                 console.log('AI response indicates it cannot determine copyright, returning null')
                 return null
             }
             return respText
         } catch (error) {
-            console.error('Error calling OpenAI for copyright selection:', error.message)
-            return null
-        }
-    }
-
-    async resolveCopyrightOnGemini (purl: string) : Promise<string> {
-        try {
-            const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
-                {
-                    contents: [{
-                      "parts":[{"text": AI_PROMPTS.copyrightResolve(purl)}]
-                    }]
-                },
-                {
-                    headers: {
-                        'x-goog-api-key': GEMINI_API_KEY,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            const respText = resp.data.candidates[0].content.parts[0].text.trim()
-            console.log(`Gemini copyright response: ${respText}`)
-            // If response contains multiple lines, return null
-            if (respText.includes('\n')) {
-                console.log('Copyright response contains multiple lines, returning null')
-                return null
-            }
-            // Reject invalid responses where AI says it can't determine
-            if (this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine copyright, returning null')
-                return null
-            }
-            return respText
-        } catch (error) {
-            console.error('Error calling Gemini for copyright:', error.message)
-            return null
-        }
-    }
-
-    async resolveCopyrightOnOpenai (purl: string) : Promise<string> {
-        try {
-            const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
-                {
-                    model: OPENAI_COPYRIGHT_MODEL,
-                    reasoning: { effort: "medium" },
-                    input: AI_PROMPTS.copyrightResolve(purl)
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                }
-            )
-            // Find the message object in the output array (skip reasoning objects)
-            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
-            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
-                console.error('No message content found in OpenAI response')
-                return null
-            }
-            const respText = messageOutput.content[0].text.trim()
-            console.log(`OpenAI copyright response: ${respText}`)
-            // If response contains multiple lines, return null
-            if (respText.includes('\n')) {
-                console.log('Copyright response contains multiple lines, returning null')
-                return null
-            }
-            // Reject invalid responses where AI says it can't determine
-            if (this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine copyright, returning null')
-                return null
-            }
-            return respText
-        } catch (error) {
-            console.error('Error calling OpenAI for copyright:', error.message)
+            console.error('Error calling AI for copyright:', error.message)
             return null
         }
     }
