@@ -565,6 +565,11 @@ export class BomMetaService {
             )
             const respText = resp.data.candidates[0].content.parts[0].text.trim()
             console.log(`Gemini selected copyright: ${respText}`)
+            // If response contains multiple lines, return null
+            if (respText.includes('\n')) {
+                console.log('Copyright response contains multiple lines, returning null')
+                return null
+            }
             return respText
         } catch (error) {
             console.error('Error calling Gemini for copyright selection:', error.message)
@@ -597,6 +602,11 @@ export class BomMetaService {
             }
             const respText = messageOutput.content[0].text.trim()
             console.log(`OpenAI selected copyright: ${respText}`)
+            // If response contains multiple lines, return null
+            if (respText.includes('\n')) {
+                console.log('Copyright response contains multiple lines, returning null')
+                return null
+            }
             return respText
         } catch (error) {
             console.error('Error calling OpenAI for copyright selection:', error.message)
@@ -622,6 +632,11 @@ export class BomMetaService {
             )
             const respText = resp.data.candidates[0].content.parts[0].text.trim()
             console.log(`Gemini copyright response: ${respText}`)
+            // If response contains multiple lines, return null
+            if (respText.includes('\n')) {
+                console.log('Copyright response contains multiple lines, returning null')
+                return null
+            }
             return respText
         } catch (error) {
             console.error('Error calling Gemini for copyright:', error.message)
@@ -653,6 +668,11 @@ export class BomMetaService {
             }
             const respText = messageOutput.content[0].text.trim()
             console.log(`OpenAI copyright response: ${respText}`)
+            // If response contains multiple lines, return null
+            if (respText.includes('\n')) {
+                console.log('Copyright response contains multiple lines, returning null')
+                return null
+            }
             return respText
         } catch (error) {
             console.error('Error calling OpenAI for copyright:', error.message)
