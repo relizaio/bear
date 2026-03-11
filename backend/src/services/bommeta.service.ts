@@ -377,18 +377,18 @@ export class BomMetaService {
             console.debug('Harvest triggered, waiting for processing...')
             
             // Retry up to 30 times with 2-second intervals
-            for (let i = 0; i < 30; i++) {
-                await this.sleep(2000)
+            for (let i = 0; i < 6; i++) {
+                await this.sleep(5000)
                 const resp = await axiosClient.get(url + "&force=true")
                 
                 if (this.hasValidScore(resp.data)) {
                     console.debug(`Valid score received after ${i + 1} retries`)
                     return resp
                 }
-                console.debug(`Retry ${i + 1}/30: Still no valid score`)
+                console.debug(`Retry ${i + 1}/6: Still no valid score`)
             }
             
-            console.log('Gave up after 30 retries, trying public ClearlyDefined API as fallback')
+            console.log('Gave up after 6 retries, trying public ClearlyDefined API as fallback')
             
             // Try public API as a fallback
             try {
