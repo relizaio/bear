@@ -324,6 +324,31 @@ export class BomMetaService {
         return data?.described?.score?.total > 0 || data?.licensed?.score?.total > 0
     }
 
+    private isInvalidCopyrightResponse (response: string) : boolean {
+        const trimmedResponse = response.trim()
+        // Check for UNKNOWN keyword
+        if (trimmedResponse === 'UNKNOWN') {
+            return true
+        }
+        const lowerResponse = response.toLowerCase()
+        const invalidPhrases = [
+            "can't determine",
+            "cannot determine",
+            "unable to determine",
+            "don't have access",
+            "do not have access",
+            "without access",
+            "need access",
+            "i don't know",
+            "i do not know",
+            "i'm unable",
+            "i am unable",
+            "not available",
+            "no information"
+        ]
+        return invalidPhrases.some(phrase => lowerResponse.includes(phrase))
+    }
+
     private async triggerHarvestAndRetry (purlStr: string, url: string) : Promise<AxiosResponse> {
         console.debug('Score is zero, triggering harvest...')
         const coordinates = this.buildClearlyDefinedCoordinates(purlStr)
@@ -428,7 +453,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
                 {
                     contents: [{
-                      "parts":[{"text": `Who is the supplier/vendor organization for the software package ${purl}? Return only a JSON object with fields: name (string), url (array of strings). No explanation.`}]
+                      "parts":[{"text": `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return only a JSON object with fields: name (string), url (array of strings). If you are unsure or cannot determine it, return exactly "UNKNOWN". No explanation.`}]
                     }]
                 },
                 {
@@ -439,8 +464,12 @@ export class BomMetaService {
                     }
                 }
             )
-            const respText = resp.data.candidates[0].content.parts[0].text
+            const respText = resp.data.candidates[0].content.parts[0].text.trim()
             console.log(`Gemini supplier response: ${respText}`)
+            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine supplier, returning null')
+                return null
+            }
             return this.parseSupplierResponse(respText)
         } catch (error) {
             console.error('Error calling Gemini for supplier:', error.message)
@@ -454,7 +483,7 @@ export class BomMetaService {
                 {
                     model: "gpt-5.2",
                     temperature: 0.2,
-                    input: `Who is the supplier/vendor organization for the software package ${purl}? Return only a JSON object with fields: name (string), url (array of strings). No explanation.`
+                    input: `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return only a JSON object with fields: name (string), url (array of strings). If you are unsure or cannot determine it, return exactly "UNKNOWN". No explanation.`
                 },
                 {
                     headers: {
@@ -464,8 +493,18 @@ export class BomMetaService {
                     }
                 }
             )
-            const respText = resp.data.output[0].content[0].text
+            // Find the message object in the output array (skip reasoning objects)
+            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
+            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
+                console.error('No message content found in OpenAI response')
+                return null
+            }
+            const respText = messageOutput.content[0].text.trim()
             console.log(`OpenAI supplier response: ${respText}`)
+            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine supplier, returning null')
+                return null
+            }
             return this.parseSupplierResponse(respText)
         } catch (error) {
             console.error('Error calling OpenAI for supplier:', error.message)
@@ -478,7 +517,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
                 {
                     contents: [{
-                      "parts":[{"text": `What is the license for the software package ${purl}? Return only the SPDX license identifier, nothing else.`}]
+                      "parts":[{"text": `You are a software package expert. What is the license for the software package ${purl}?\n\nIMPORTANT: Return only the SPDX license identifier (e.g., MIT, Apache-2.0). If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`}]
                     }]
                 },
                 {
@@ -491,6 +530,10 @@ export class BomMetaService {
             )
             const respText = resp.data.candidates[0].content.parts[0].text.trim()
             console.log(`Gemini license response: ${respText}`)
+            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine license, returning null')
+                return null
+            }
             return this.parseLicenseResponse(respText)
         } catch (error) {
             console.error('Error calling Gemini for license:', error.message)
@@ -504,7 +547,7 @@ export class BomMetaService {
                 {
                     model: "gpt-5.2",
                     temperature: 0.2,
-                    input: `What is the SPDX license identifier for ${purl}? Return only the SPDX license ID with no explanation, e.g. MIT or Apache-2.0`
+                    input: `You are a software package expert. What is the SPDX license identifier for ${purl}?\n\nIMPORTANT: Return only the SPDX license ID (e.g., MIT, Apache-2.0). If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
                 },
                 {
                     headers: {
@@ -514,8 +557,18 @@ export class BomMetaService {
                     }
                 }
             )
-            const respText = resp.data.output[0].content[0].text.trim()
+            // Find the message object in the output array (skip reasoning objects)
+            const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
+            if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
+                console.error('No message content found in OpenAI response')
+                return null
+            }
+            const respText = messageOutput.content[0].text.trim()
             console.log(`OpenAI license response: ${respText}`)
+            if (respText === 'UNKNOWN' || this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine license, returning null')
+                return null
+            }
             return this.parseLicenseResponse(respText)
         } catch (error) {
             console.error('Error calling OpenAI for license:', error.message)
@@ -570,7 +623,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
                 {
                     contents: [{
-                      "parts":[{"text": `Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nReturn only the exact copyright text from the list above, nothing else.`}]
+                      "parts":[{"text": `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY the exact copyright text from the list above. If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`}]
                     }]
                 },
                 {
@@ -588,6 +641,11 @@ export class BomMetaService {
                 console.log('Copyright response contains multiple lines, returning null')
                 return null
             }
+            // Reject invalid responses where AI says it can't determine
+            if (this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine copyright, returning null')
+                return null
+            }
             return respText
         } catch (error) {
             console.error('Error calling Gemini for copyright selection:', error.message)
@@ -602,7 +660,7 @@ export class BomMetaService {
                 {
                     model: OPENAI_COPYRIGHT_MODEL,
                     reasoning: { effort: "medium" },
-                    input: `Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nReturn only the exact copyright text from the list above, nothing else.`
+                    input: `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY the exact copyright text from the list above. If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
                 },
                 {
                     headers: {
@@ -625,6 +683,11 @@ export class BomMetaService {
                 console.log('Copyright response contains multiple lines, returning null')
                 return null
             }
+            // Reject invalid responses where AI says it can't determine
+            if (this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine copyright, returning null')
+                return null
+            }
             return respText
         } catch (error) {
             console.error('Error calling OpenAI for copyright selection:', error.message)
@@ -637,7 +700,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
                 {
                     contents: [{
-                      "parts":[{"text": `What is the copyright notice for the software package ${purl}? Return only the copyright text (e.g., "Copyright (c) 2024 Company Name"), nothing else.`}]
+                      "parts":[{"text": `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY the copyright text in the format "Copyright (c) YYYY Name". If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`}]
                     }]
                 },
                 {
@@ -655,6 +718,11 @@ export class BomMetaService {
                 console.log('Copyright response contains multiple lines, returning null')
                 return null
             }
+            // Reject invalid responses where AI says it can't determine
+            if (this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine copyright, returning null')
+                return null
+            }
             return respText
         } catch (error) {
             console.error('Error calling Gemini for copyright:', error.message)
@@ -668,7 +736,7 @@ export class BomMetaService {
                 {
                     model: OPENAI_COPYRIGHT_MODEL,
                     reasoning: { effort: "medium" },
-                    input: `What is the copyright notice for the software package ${purl}? Return only the copyright text (e.g., "Copyright (c) 2024 Company Name"), nothing else.`
+                    input: `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY the copyright text in the format "Copyright (c) YYYY Name". If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
                 },
                 {
                     headers: {
@@ -689,6 +757,11 @@ export class BomMetaService {
             // If response contains multiple lines, return null
             if (respText.includes('\n')) {
                 console.log('Copyright response contains multiple lines, returning null')
+                return null
+            }
+            // Reject invalid responses where AI says it can't determine
+            if (this.isInvalidCopyrightResponse(respText)) {
+                console.log('AI response indicates it cannot determine copyright, returning null')
                 return null
             }
             return respText
