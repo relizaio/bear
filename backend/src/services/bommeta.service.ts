@@ -18,6 +18,14 @@ const SUPPLIER_NORMALIZATIONS: Record<string, {name: string, url: string}> = {
     'microsoft': { name: 'Microsoft', url: 'https://www.microsoft.com' },
 }
 
+// AI Prompts - DRY constants for both Gemini and OpenAI
+const AI_PROMPTS = {
+    supplier: (purl: string) => `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return only a JSON object with fields: name (string), url (array of strings). If you are unsure or cannot determine it, return exactly "UNKNOWN". No explanation.`,
+    license: (purl: string) => `You are a software package expert. What is the license for the software package ${purl}?\n\nIMPORTANT: Return only the SPDX license identifier (e.g., MIT, Apache-2.0). If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`,
+    copyrightSelect: (purl: string, copyrightList: string) => `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY the exact copyright text from the list above. If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`,
+    copyrightResolve: (purl: string) => `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY the copyright text in the format "Copyright (c) YYYY Name". If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
+}
+
 @Injectable()
 export class BomMetaService {
 
@@ -453,7 +461,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
                 {
                     contents: [{
-                      "parts":[{"text": `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return only a JSON object with fields: name (string), url (array of strings). If you are unsure or cannot determine it, return exactly "UNKNOWN". No explanation.`}]
+                      "parts":[{"text": AI_PROMPTS.supplier(purl)}]
                     }]
                 },
                 {
@@ -483,7 +491,7 @@ export class BomMetaService {
                 {
                     model: "gpt-5.2",
                     temperature: 0.2,
-                    input: `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return only a JSON object with fields: name (string), url (array of strings). If you are unsure or cannot determine it, return exactly "UNKNOWN". No explanation.`
+                    input: AI_PROMPTS.supplier(purl)
                 },
                 {
                     headers: {
@@ -517,7 +525,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
                 {
                     contents: [{
-                      "parts":[{"text": `You are a software package expert. What is the license for the software package ${purl}?\n\nIMPORTANT: Return only the SPDX license identifier (e.g., MIT, Apache-2.0). If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`}]
+                      "parts":[{"text": AI_PROMPTS.license(purl)}]
                     }]
                 },
                 {
@@ -547,7 +555,7 @@ export class BomMetaService {
                 {
                     model: "gpt-5.2",
                     temperature: 0.2,
-                    input: `You are a software package expert. What is the SPDX license identifier for ${purl}?\n\nIMPORTANT: Return only the SPDX license ID (e.g., MIT, Apache-2.0). If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
+                    input: AI_PROMPTS.license(purl)
                 },
                 {
                     headers: {
@@ -623,7 +631,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
                 {
                     contents: [{
-                      "parts":[{"text": `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY the exact copyright text from the list above. If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`}]
+                      "parts":[{"text": AI_PROMPTS.copyrightSelect(purl, copyrightList)}]
                     }]
                 },
                 {
@@ -660,7 +668,7 @@ export class BomMetaService {
                 {
                     model: OPENAI_COPYRIGHT_MODEL,
                     reasoning: { effort: "medium" },
-                    input: `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY the exact copyright text from the list above. If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
+                    input: AI_PROMPTS.copyrightSelect(purl, copyrightList)
                 },
                 {
                     headers: {
@@ -700,7 +708,7 @@ export class BomMetaService {
             const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_COPYRIGHT_MODEL}:generateContent`,
                 {
                     contents: [{
-                      "parts":[{"text": `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY the copyright text in the format "Copyright (c) YYYY Name". If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`}]
+                      "parts":[{"text": AI_PROMPTS.copyrightResolve(purl)}]
                     }]
                 },
                 {
@@ -736,7 +744,7 @@ export class BomMetaService {
                 {
                     model: OPENAI_COPYRIGHT_MODEL,
                     reasoning: { effort: "medium" },
-                    input: `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY the copyright text in the format "Copyright (c) YYYY Name". If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
+                    input: AI_PROMPTS.copyrightResolve(purl)
                 },
                 {
                     headers: {
