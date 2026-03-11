@@ -376,33 +376,33 @@ export class BomMetaService {
             )
             console.debug('Harvest triggered, waiting for processing...')
             
-            // Retry up to 30 times with 2-second intervals
-            for (let i = 0; i < 6; i++) {
-                await this.sleep(5000)
+            const tries = 5;
+            for (let i = 0; i < tries; i++) {
+                await this.sleep(6000)
                 const resp = await axiosClient.get(url + "&force=true")
                 
                 if (this.hasValidScore(resp.data)) {
                     console.debug(`Valid score received after ${i + 1} retries`)
                     return resp
                 }
-                console.debug(`Retry ${i + 1}/6: Still no valid score`)
-            }
-            
-            console.log('Gave up after 6 retries, trying public ClearlyDefined API as fallback')
-            
-            // Try public API as a fallback
-            try {
-                const publicUrl = this.buildClearlyDefinedUrl(purlStr, 'https://api.clearlydefined.io')
-                console.log(`Calling public ClearlyDefined API: ${publicUrl}`)
-                const publicResp = await axiosClient.get(publicUrl)
+                console.debug(`Retry ${i + 1}/${tries}: Still no valid score`)
                 
-                if (this.hasValidScore(publicResp.data)) {
-                    console.log('Public ClearlyDefined API returned valid score, using that')
-                    return publicResp
+                // After 1st retry, try public ClearlyDefined API with 10s timeout
+                if (i === 0) {
+                    try {
+                        const publicUrl = this.buildClearlyDefinedUrl(purlStr, 'https://api.clearlydefined.io')
+                        console.log(`Calling public ClearlyDefined API: ${publicUrl}`)
+                        const publicResp = await axiosClient.get(publicUrl, { timeout: 10000 })
+                        
+                        if (this.hasValidScore(publicResp.data)) {
+                            console.log('Public ClearlyDefined API returned valid score, using that')
+                            return publicResp
+                        }
+                        console.log('Public ClearlyDefined API has no valid score either, continuing retries')
+                    } catch (publicError) {
+                        console.error('Error calling public ClearlyDefined API:', publicError.message)
+                    }
                 }
-                console.log('Public ClearlyDefined API has no valid score either')
-            } catch (publicError) {
-                console.error('Error calling public ClearlyDefined API:', publicError.message)
             }
             
             // Fall back to original URL
