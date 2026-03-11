@@ -297,13 +297,14 @@ export class BomMetaService {
         return mapping[purlType] || { type: purlType, provider: purlType }
     }
 
-    private buildClearlyDefinedUrl (purlStr: string) : string {
+    private buildClearlyDefinedUrl (purlStr: string, baseUrl?: string) : string {
         const purl = PackageURL.fromString(purlStr)
         const { type, provider } = this.mapPurlTypeToClearlyDefined(purl.type)
         const namespace = purl.namespace || '-'
         const name = purl.name
         const revision = purl.version || '-'
-        return `${CLEARLYDEFINED_API_URI}/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
+        const apiUri = baseUrl || CLEARLYDEFINED_API_URI
+        return `${apiUri}/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
     }
 
     private buildClearlyDefinedCoordinates (purlStr: string) : string {
@@ -338,8 +339,8 @@ export class BomMetaService {
             )
             console.debug('Harvest triggered, waiting for processing...')
             
-            // Retry up to 10 times with 2-second intervals
-            for (let i = 0; i < 60; i++) {
+            // Retry up to 30 times with 2-second intervals
+            for (let i = 0; i < 30; i++) {
                 await this.sleep(2000)
                 const resp = await axiosClient.get(url + "&force=true")
                 
@@ -350,7 +351,24 @@ export class BomMetaService {
                 console.debug(`Retry ${i + 1}/30: Still no valid score`)
             }
             
-            console.log('Gave up after 30 retries, fetching final data')
+            console.log('Gave up after 30 retries, trying public ClearlyDefined API as fallback')
+            
+            // Try public API as a fallback
+            try {
+                const publicUrl = this.buildClearlyDefinedUrl(purlStr, 'https://api.clearlydefined.io')
+                console.log(`Calling public ClearlyDefined API: ${publicUrl}`)
+                const publicResp = await axiosClient.get(publicUrl)
+                
+                if (this.hasValidScore(publicResp.data)) {
+                    console.log('Public ClearlyDefined API returned valid score, using that')
+                    return publicResp
+                }
+                console.log('Public ClearlyDefined API has no valid score either')
+            } catch (publicError) {
+                console.error('Error calling public ClearlyDefined API:', publicError.message)
+            }
+            
+            // Fall back to original URL
             return await axiosClient.get(url)
         } catch (harvestError) {
             console.error('Error triggering harvest:', harvestError.message)
