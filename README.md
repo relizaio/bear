@@ -19,7 +19,7 @@ BEAR_OPENAI_COPYRIGHT_MODEL="o1"
 ```
 
 Optional environment variables:
-- `BEAR_CLEARLYDEFINED_API_URI`: Use a custom ClearlyDefined instance. Defaults to `https://api.clearlydefined.io`. When using a non-public instance, BEAR will automatically trigger the harvest endpoint for packages with zero scores and retry up to 30 times.
+- `BEAR_CLEARLYDEFINED_API_URI`: Use a custom ClearlyDefined instance. Defaults to `https://api.clearlydefined.io`. When using a non-public instance, BEAR will automatically try the public API as fallback, then trigger the harvest endpoint for packages with zero scores and retry up to 10 times.
 - `BEAR_GEMINI_COPYRIGHT_MODEL`: Gemini model for copyright selection/resolution. Defaults to `gemini-2.0-flash`. Use `gemini-2.0-flash-thinking-exp` or other thinking models for better accuracy when selecting from multiple copyright options.
 - `BEAR_OPENAI_COPYRIGHT_MODEL`: OpenAI model for copyright selection/resolution. Defaults to `gpt-5.2`. Use `o1` or other reasoning models for better accuracy when selecting from multiple copyright options.
 
@@ -82,7 +82,8 @@ BEAR uses a multi-tiered resolution strategy for enriching BOM components with s
    └─ Validate: reject if name is "OTHER", "NOASSERTION", or "NONE"
        ↓ (if not found or invalid)
 4. AI Fallback
-   └─ Gemini or OpenAI generates supplier information
+   └─ Gemini or OpenAI returns JSON with supplier info and confidence score
+   └─ Reject if confidence < 0.6 or response contains invalid phrases
    └─ Source: GEMINI or OPENAI
 ```
 
@@ -101,7 +102,8 @@ BEAR uses a multi-tiered resolution strategy for enriching BOM components with s
    └─ Validate: reject if contains "LicenseRef", "OTHER", "NOASSERTION", or "NONE"
        ↓ (if not found or invalid)
 4. AI Fallback
-   └─ Gemini or OpenAI generates SPDX license identifier
+   └─ Gemini or OpenAI returns JSON with SPDX license identifier and confidence score
+   └─ Reject if confidence < 0.6 or response contains invalid phrases
    └─ Detect AND/OR operators in AI response
    └─ Source: GEMINI or OPENAI
 ```
@@ -124,7 +126,8 @@ BEAR uses a multi-tiered resolution strategy for enriching BOM components with s
    └─ Source: CLEARLYDEFINED
        ↓ (if not found)
 4. AI Fallback
-   └─ Gemini or OpenAI generates copyright notice
+   └─ Gemini or OpenAI returns JSON with copyright notice and confidence score
+   └─ Reject if confidence < 0.6 or response contains invalid phrases
    └─ Uses configurable copyright model (supports reasoning models)
    └─ Source: GEMINI or OPENAI
 ```
@@ -147,17 +150,25 @@ This information is stored in the `sources` field as:
 }
 ```
 
-### ClearlyDefined Harvest (Non-Public Instances)
+### ClearlyDefined Resolution Flow
 
-When using a custom ClearlyDefined instance (via `BEAR_CLEARLYDEFINED_API_URI`), BEAR automatically:
-1. Checks if the package has a valid score (non-zero)
-2. If score is zero, triggers the harvest endpoint
-3. Retries up to 30 times with 2-second intervals
-4. Uses the harvested data once available
+BEAR uses a multi-step approach to resolve data from ClearlyDefined:
+1. Call the configured ClearlyDefined API (private instance if set via `BEAR_CLEARLYDEFINED_API_URI`)
+2. If no valid score, call the public ClearlyDefined API (`https://api.clearlydefined.io`) with a 10-second timeout
+3. If still no valid score and using a non-public instance, trigger the harvest endpoint and retry up to 10 times with 6-second intervals
+4. Use the best available data once resolved
+
+### AI Response Validation
+
+All AI responses are requested as JSON with a `confidence` field (float 0-1). BEAR validates AI responses by:
+1. Checking for invalid phrases (e.g., "cannot determine", "unable to") and single-quote characters
+2. Parsing the JSON response and extracting the `confidence` score
+3. Rejecting responses with confidence below `0.6`
+4. Stripping the `confidence` field before storage
 
 ### AI Model Selection
 
-- **Standard resolution**: Uses default models (`gemini-2.0-flash`, `gpt-5.4`)
+- **Standard resolution**: Uses default models (`gemini-2.0-flash`, `gpt-5.2`)
 - **Copyright resolution**: Uses configurable models via `BEAR_GEMINI_COPYRIGHT_MODEL` and `BEAR_OPENAI_COPYRIGHT_MODEL`
   - Recommended: `gemini-2.0-flash-thinking-exp` or `o1` for better accuracy
   - OpenAI requests include `reasoning: { effort: "medium" }` parameter

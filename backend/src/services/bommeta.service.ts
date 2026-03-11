@@ -376,7 +376,7 @@ export class BomMetaService {
             )
             console.debug('Harvest triggered, waiting for processing...')
             
-            const tries = 5;
+            const tries = 10;
             for (let i = 0; i < tries; i++) {
                 await this.sleep(6000)
                 const resp = await axiosClient.get(url + "&force=true")
@@ -386,23 +386,6 @@ export class BomMetaService {
                     return resp
                 }
                 console.debug(`Retry ${i + 1}/${tries}: Still no valid score`)
-                
-                // After 1st retry, try public ClearlyDefined API with 10s timeout
-                if (i === 0) {
-                    try {
-                        const publicUrl = this.buildClearlyDefinedUrl(purlStr, 'https://api.clearlydefined.io')
-                        console.log(`Calling public ClearlyDefined API: ${publicUrl}`)
-                        const publicResp = await axiosClient.get(publicUrl, { timeout: 10000 })
-                        
-                        if (this.hasValidScore(publicResp.data)) {
-                            console.log('Public ClearlyDefined API returned valid score, using that')
-                            return publicResp
-                        }
-                        console.log('Public ClearlyDefined API has no valid score either, continuing retries')
-                    } catch (publicError) {
-                        console.error('Error calling public ClearlyDefined API:', publicError.message)
-                    }
-                }
             }
             
             // Fall back to original URL
@@ -420,7 +403,25 @@ export class BomMetaService {
             
             let resp: AxiosResponse = await axiosClient.get(url)
             
-            // If using non-public API and score is all zeros, trigger harvest and retry
+            // Step 2: If no valid score, try public ClearlyDefined API with 10s timeout
+            if (!this.hasValidScore(resp.data)) {
+                try {
+                    const publicUrl = this.buildClearlyDefinedUrl(purlStr, 'https://api.clearlydefined.io')
+                    console.log(`No valid score from private API, calling public ClearlyDefined API: ${publicUrl}`)
+                    const publicResp = await axiosClient.get(publicUrl, { timeout: 10000 })
+                    
+                    if (this.hasValidScore(publicResp.data)) {
+                        console.log('Public ClearlyDefined API returned valid score, using that')
+                        resp = publicResp
+                    } else {
+                        console.log('Public ClearlyDefined API has no valid score either')
+                    }
+                } catch (publicError) {
+                    console.error('Error calling public ClearlyDefined API:', publicError.message)
+                }
+            }
+            
+            // Step 3: If still no valid score and using non-public API, trigger harvest and retry
             if (!IS_PUBLIC_CLEARLYDEFINED && !this.hasValidScore(resp.data)) {
                 resp = await this.triggerHarvestAndRetry(purlStr, url)
             }
