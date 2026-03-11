@@ -134,12 +134,14 @@ export class BomMetaService {
         }
         
         // 4. If we still need supplier, license, or copyright, try ClearlyDefined (single call)
+        // Skip ClearlyDefined for unsupported package types (e.g., apk)
+        const purl = PackageURL.fromString(purlStr)
         const needSupplierFromCD = !supplier
         const needLicenseFromCD = !license
         const needCopyrightFromCD = !copyright
         let cdCopyrights: string[] = []
         
-        if (needSupplierFromCD || needLicenseFromCD || needCopyrightFromCD) {
+        if ((needSupplierFromCD || needLicenseFromCD || needCopyrightFromCD) && this.isClearlyDefinedSupported(purl.type)) {
             const cdResult = await this.resolveOnClearlyDefined(purlStr)
             
             if (needSupplierFromCD && cdResult.supplier && !this.isInvalidValue(cdResult.supplier.name)) {
@@ -153,6 +155,8 @@ export class BomMetaService {
             if (needCopyrightFromCD && cdResult.copyrights && cdResult.copyrights.length > 0) {
                 cdCopyrights = cdResult.copyrights
             }
+        } else if (!this.isClearlyDefinedSupported(purl.type)) {
+            console.log(`Package type ${purl.type} is not supported by ClearlyDefined, skipping to AI`)
         }
         
         // 5. Fallback to AI for supplier and license still missing
@@ -269,6 +273,16 @@ export class BomMetaService {
     private isInvalidLicense (license: LicenseData) : boolean {
         const checkValue = license.id || license.expression || ''
         return this.isInvalidValue(checkValue) || checkValue.includes('LicenseRef') || checkValue.includes('OTHER')
+    }
+
+    private isClearlyDefinedSupported (purlType: string) : boolean {
+        // Explicit unsupported types
+        if (purlType === 'apk') {
+            return false
+        }
+        // Check if type is in the mapping table
+        const supportedTypes = ['nuget', 'npm', 'maven', 'pypi', 'gem', 'cargo', 'golang', 'composer', 'cocoapods', 'github']
+        return supportedTypes.includes(purlType)
     }
 
     private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {
