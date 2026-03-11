@@ -19,11 +19,13 @@ const SUPPLIER_NORMALIZATIONS: Record<string, {name: string, url: string}> = {
 }
 
 // AI Prompts - DRY constants for both Gemini and OpenAI
+// All prompts request JSON with a confidence field (0-1 float)
+const CONFIDENCE_THRESHOLD = 0.6
 const AI_PROMPTS = {
-    supplier: (purl: string) => `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return only a JSON object with fields: name (string), url (array of strings). If you are unsure or cannot determine it, return exactly "UNKNOWN". No explanation.`,
-    license: (purl: string) => `You are a software package expert. What is the license for the software package ${purl}?\n\nIMPORTANT: Return only the SPDX license identifier (e.g., MIT, Apache-2.0). If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`,
-    copyrightSelect: (purl: string, copyrightList: string) => `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY the exact copyright text from the list above. If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`,
-    copyrightResolve: (purl: string) => `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY the copyright text in the format "Copyright (c) YYYY Name". If you are unsure or cannot determine it, return exactly "UNKNOWN". Return nothing else.`
+    supplier: (purl: string) => `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return ONLY a JSON object with fields: name (string), url (array of strings), confidence (float 0 to 1 indicating your confidence). Example: {"name": "Acme Corp", "url": ["https://acme.com"], "confidence": 0.95}. If you cannot determine it, return {"confidence": 0}. No explanation, no markdown.`,
+    license: (purl: string) => `You are a software package expert. What is the license for the software package ${purl}?\n\nIMPORTANT: Return ONLY a JSON object with fields: license (string, SPDX identifier e.g. MIT or Apache-2.0), confidence (float 0 to 1 indicating your confidence). Example: {"license": "MIT", "confidence": 0.95}. If you cannot determine it, return {"license": "UNKNOWN", "confidence": 0}. No explanation, no markdown.`,
+    copyrightSelect: (purl: string, copyrightList: string) => `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY a JSON object with fields: copyright (string, the exact copyright text from the list above), confidence (float 0 to 1 indicating your confidence). Example: {"copyright": "Copyright (c) 2020 Acme Corp", "confidence": 0.9}. If you cannot determine it, return {"copyright": "UNKNOWN", "confidence": 0}. No explanation, no markdown.`,
+    copyrightResolve: (purl: string) => `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY a JSON object with fields: copyright (string, in the format "Copyright (c) YYYY Name"), confidence (float 0 to 1 indicating your confidence). Example: {"copyright": "Copyright (c) 2020 Acme Corp", "confidence": 0.9}. If you cannot determine it, return {"copyright": "UNKNOWN", "confidence": 0}. No explanation, no markdown.`
 }
 
 @Injectable()
@@ -312,13 +314,12 @@ export class BomMetaService {
         return data?.described?.score?.total > 0 || data?.licensed?.score?.total > 0
     }
 
-    private isInvalidCopyrightResponse (response: string) : boolean {
-        const trimmedResponse = response.trim()
-        // Check for UNKNOWN keyword
-        if (trimmedResponse === 'UNKNOWN') {
+    private isInvalidResponse (response: string) : boolean {
+        const lowerResponse = response.toLowerCase()
+        // Treat presence of single quote as invalid (AI is explaining rather than returning data)
+        if (response.includes("’")) {
             return true
         }
-        const lowerResponse = response.toLowerCase()
         const invalidPhrases = [
             "can't determine",
             "cannot determine",
@@ -335,6 +336,29 @@ export class BomMetaService {
             "no information"
         ]
         return invalidPhrases.some(phrase => lowerResponse.includes(phrase))
+    }
+
+    private parseAiJson (rawText: string) : any | null {
+        // Run invalid response check on raw AI text as additional guard
+        if (this.isInvalidResponse(rawText)) {
+            console.log('AI response contains invalid phrases, treating as invalid. Raw:', rawText)
+            return null
+        }
+        let text = rawText.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+        try {
+            const parsed = JSON.parse(text)
+            const confidence = parsed.confidence
+            console.log(`AI confidence: ${confidence}`)
+            if (typeof confidence !== 'number' || confidence < CONFIDENCE_THRESHOLD) {
+                console.log(`AI confidence ${confidence} is below threshold ${CONFIDENCE_THRESHOLD}, treating as invalid`)
+                return null
+            }
+            delete parsed.confidence
+            return parsed
+        } catch (error) {
+            console.error('Failed to parse AI JSON response:', error.message, 'Raw:', rawText)
+            return null
+        }
     }
 
     private async triggerHarvestAndRetry (purlStr: string, url: string) : Promise<AxiosResponse> {
@@ -493,11 +517,17 @@ export class BomMetaService {
         try {
             const respText = await this.callAi(AI_PROMPTS.supplier(purl))
             console.log(`AI supplier response: ${respText}`)
-            if (this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine supplier, returning null')
+            const parsed = this.parseAiJson(respText)
+            if (!parsed || !parsed.name) {
+                console.log('AI supplier response is invalid or low confidence, returning null')
                 return null
             }
-            return this.parseSupplierResponse(respText)
+            const supplier = new CDX.Models.OrganizationalEntity({ name: parsed.name })
+            if (parsed.url) {
+                const urls = Array.isArray(parsed.url) ? parsed.url : [parsed.url]
+                urls.forEach((u: string) => supplier.url.add(u))
+            }
+            return supplier
         } catch (error) {
             console.error('Error calling AI for supplier:', error.message)
             return null
@@ -508,11 +538,12 @@ export class BomMetaService {
         try {
             const respText = await this.callAi(AI_PROMPTS.license(purl))
             console.log(`AI license response: ${respText}`)
-            if (this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine license, returning null')
+            const parsed = this.parseAiJson(respText)
+            if (!parsed || !parsed.license || parsed.license === 'UNKNOWN') {
+                console.log('AI license response is invalid or low confidence, returning null')
                 return null
             }
-            return this.parseLicenseResponse(respText)
+            return this.parseLicenseResponse(parsed.license)
         } catch (error) {
             console.error('Error calling AI for license:', error.message)
             return null
@@ -566,16 +597,12 @@ export class BomMetaService {
             const copyrightModel = AI_TYPE === 'GEMINI' ? GEMINI_COPYRIGHT_MODEL : OPENAI_COPYRIGHT_MODEL
             const respText = await this.callAi(AI_PROMPTS.copyrightSelect(purl, copyrightList), copyrightModel, { effort: "medium" })
             console.log(`AI selected copyright: ${respText}`)
-            // If response contains multiple lines, return null
-            if (respText.includes('\n')) {
-                console.log('Copyright response contains multiple lines, returning null')
+            const parsed = this.parseAiJson(respText)
+            if (!parsed || !parsed.copyright || parsed.copyright === 'UNKNOWN') {
+                console.log('AI copyright selection is invalid or low confidence, returning null')
                 return null
             }
-            if (this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine copyright, returning null')
-                return null
-            }
-            return respText
+            return parsed.copyright
         } catch (error) {
             console.error('Error calling AI for copyright selection:', error.message)
             return null
@@ -587,16 +614,12 @@ export class BomMetaService {
             const copyrightModel = AI_TYPE === 'GEMINI' ? GEMINI_COPYRIGHT_MODEL : OPENAI_COPYRIGHT_MODEL
             const respText = await this.callAi(AI_PROMPTS.copyrightResolve(purl), copyrightModel, { effort: "medium" })
             console.log(`AI copyright response: ${respText}`)
-            // If response contains multiple lines, return null
-            if (respText.includes('\n')) {
-                console.log('Copyright response contains multiple lines, returning null')
+            const parsed = this.parseAiJson(respText)
+            if (!parsed || !parsed.copyright || parsed.copyright === 'UNKNOWN') {
+                console.log('AI copyright response is invalid or low confidence, returning null')
                 return null
             }
-            if (this.isInvalidCopyrightResponse(respText)) {
-                console.log('AI response indicates it cannot determine copyright, returning null')
-                return null
-            }
-            return respText
+            return parsed.copyright
         } catch (error) {
             console.error('Error calling AI for copyright:', error.message)
             return null
@@ -608,25 +631,6 @@ export class BomMetaService {
             return { expression: licenseStr }
         }
         return { id: licenseStr }
-    }
-
-    private parseSupplierResponse (aiResponse: string) : CDX.Models.OrganizationalEntity {
-        try {
-            let respTextForParse = aiResponse.replace('```json', '').replace('```', '').trim()
-            if (respTextForParse.charAt(0) !== '{') respTextForParse = '{' + respTextForParse + '}'
-            let parsed: any = JSON.parse(respTextForParse)
-            if (parsed.supplier) parsed = parsed.supplier
-            
-            const supplier = new CDX.Models.OrganizationalEntity({ name: parsed.name })
-            if (parsed.url) {
-                const urls = Array.isArray(parsed.url) ? parsed.url : [parsed.url]
-                urls.forEach((u: string) => supplier.url.add(u))
-            }
-            return supplier
-        } catch (error) {
-            console.error('Error parsing supplier response:', error.message)
-            return null
-        }
     }
 
 }
