@@ -10,7 +10,7 @@ const AI_TYPE = process.env.BEAR_AI_TYPE // GEMINI or OPENAI
 const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
 const GEMINI_COPYRIGHT_MODEL = process.env.BEAR_GEMINI_COPYRIGHT_MODEL || 'gemini-2.0-flash'
 const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
-const OPENAI_COPYRIGHT_MODEL = process.env.BEAR_OPENAI_COPYRIGHT_MODEL || 'gpt-5.4'
+const OPENAI_COPYRIGHT_MODEL = process.env.BEAR_OPENAI_COPYRIGHT_MODEL || 'gpt-5.2'
 const CLEARLYDEFINED_API_URI = process.env.BEAR_CLEARLYDEFINED_API_URI || 'https://api.clearlydefined.io'
 const IS_PUBLIC_CLEARLYDEFINED = CLEARLYDEFINED_API_URI === 'https://api.clearlydefined.io'
 
