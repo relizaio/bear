@@ -91,7 +91,15 @@ export class BomMetaService {
         bommeta.sources = sources
         bommeta.ecosystem = purl.type
         bommeta.purl = purlStr
-        this.saveToDb(bommeta)
+        try {
+            await this.saveToDb(bommeta)
+        } catch (error) {
+            if (error.code === '23505') {
+                console.log(`Duplicate purl ${purlStr} detected, skipping insert`)
+            } else {
+                throw error
+            }
+        }
         return bommeta
     }
 
