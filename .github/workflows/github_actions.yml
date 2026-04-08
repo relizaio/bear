@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build And Submit BEAR Backend Release to ReARM
-        uses: relizaio/rearm-docker-action@5038cf24067c7a71400b633819c3eb97b17aa5c1 # v1.8.0
+        uses: relizaio/rearm-docker-action@a2d6978bea42cc6d707515bb927f0c693427fe58 # v1.10.0
         with:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build And Submit BEAR Helm Chart to ReARM
-        uses: relizaio/rearm-helm-action@176f1804ec0bc92dee2bb625f7b2248ad089af62 # v1.5.0
+        uses: relizaio/rearm-helm-action@fadce9114216c8e9a69fcdd389e99911642b6cfe # v1.7.1
         with:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
