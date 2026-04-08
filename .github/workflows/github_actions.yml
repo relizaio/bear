@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build And Submit BEAR Helm Chart to ReARM
-        uses: relizaio/rearm-helm-action@fadce9114216c8e9a69fcdd389e99911642b6cfe # v1.7.1
+        uses: relizaio/rearm-helm-action@670ae40fd77b1892194ca8f4ffb7d86a403ef52e # v1.7.2
         with:
           registry_username: ${{ secrets.DOCKER_LOGIN }}
           registry_password: ${{ secrets.DOCKER_TOKEN }}
