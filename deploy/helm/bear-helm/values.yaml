@@ -13,6 +13,7 @@ image:
   backEndImage: registry.relizahub.com/library/bear-backend:latest
   postgresImage: registry.relizahub.com/library/rearm-postgres:0.1.2@sha256:1d2b05e8662eb69bea12a04e91520e7f364e1ee3696a8a9feb0251c14b0f5950
   flywayImage: docker.io/redgate/flyway:11.14.0-alpine@sha256:19a1178e519f9c4448956bb7a7d7c52610e6c46503a5f752d13f04120092c45d
+  backups: registry.relizahub.com/library/cloud-backup:26.04.0@sha256:abae25e630892c60018e1d269f1d41db4f444a87c556ed41e69540c2337998ee
   pullPolicy: IfNotPresent
 
 imagePullSecrets: [ {"name":"regcred"} ]
@@ -28,6 +29,14 @@ leHost: bear.localhost
 backendService:
   type: ClusterIP
   port: 8085
+
+backups:
+  prefix: "bear-backups"
+  storageType: s3  # Options: s3, azure
+  secretName: bear-backup  # K8s secret used by DB backup cronjob
+  db:
+    enabled: false
+    schedule: "0 0 * * *"
 
 postgresql:
   image:
