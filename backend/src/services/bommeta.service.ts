@@ -134,11 +134,13 @@ export class BomMetaService {
         
         const purl = PackageURL.fromString(purlStr)
 
-        // 4. If license still missing, try deps.dev
-        if (!license && this.isDepsDotDevSupported(purl.type)) {
-            const depsDevLicense = await this.resolveOnDepsDev(purlStr)
-            if (depsDevLicense) {
-                license = depsDevLicense
+        // 4. Try deps.dev for license (and extract GitHub source repo for later copyright use)
+        let depsDevGithubRepo: string | null = null
+        if (this.isDepsDotDevSupported(purl.type)) {
+            const depsDevResult = await this.resolveOnDepsDev(purlStr)
+            depsDevGithubRepo = depsDevResult.githubSourceRepo
+            if (!license && depsDevResult.license) {
+                license = depsDevResult.license
                 licenseSource = SourceType.DEPSDEV
             }
         }
@@ -178,28 +180,37 @@ export class BomMetaService {
             licenseSource = AI_TYPE === 'GEMINI' ? SourceType.GEMINI : SourceType.OPENAI
         }
         
-        // 6. Resolve copyright: NuGet -> ClearlyDefined -> AI
+        // 6. Resolve copyright: NuGet -> GitHub LICENSE -> ClearlyDefined -> AI
         if (!copyright) {
             // First, try NuGet for nuget packages
-            const purl = PackageURL.fromString(purlStr)
             if (purl.type === 'nuget') {
                 copyright = await this.resolveCopyrightOnNuget(purlStr)
                 if (copyright) {
                     copyrightSource = SourceType.NUGET
                 }
             }
-            
-            // If NuGet didn't provide copyright, check ClearlyDefined copyrights
+
+            // If GitHub didn't provide copyright, check ClearlyDefined copyrights
             if (!copyright) {
                 if (cdCopyrights.length === 1) {
                     // Exactly one copyright - use it directly
                     copyright = cdCopyrights[0]
                     copyrightSource = SourceType.CLEARLYDEFINED
-                } else if (cdCopyrights.length > 1) {
-                    // Multiple copyrights - ask AI to select the correct one
-                    copyright = await this.selectCopyright(purlStr, cdCopyrights)
-                    copyrightSource = SourceType.CLEARLYDEFINED
+                } 
+            }
+            
+            // Try GitHub LICENSE file if we have a source repo from deps.dev
+            if (!copyright && depsDevGithubRepo && license) {
+                copyright = await this.resolveCopyrightFromGitHub(depsDevGithubRepo, license)
+                if (copyright) {
+                    copyrightSource = SourceType.DEPSDEV
                 }
+            }
+
+            if (!copyright && cdCopyrights.length > 1) {
+                // Multiple copyrights - ask AI to select the correct one
+                copyright = await this.selectCopyright(purlStr, cdCopyrights)
+                copyrightSource = SourceType.CLEARLYDEFINED
             }
             
             // Final fallback to AI if no copyright found
@@ -326,23 +337,71 @@ export class BomMetaService {
         return `https://api.deps.dev/v3/systems/${system}/packages/${encodedName}/versions/${encodedVersion}`
     }
 
-    async resolveOnDepsDev (purlStr: string) : Promise<LicenseData | null> {
+    async resolveOnDepsDev (purlStr: string) : Promise<{ license: LicenseData | null, githubSourceRepo: string | null }> {
         try {
             const url = this.buildDepsDotDevUrl(purlStr)
             console.log(`Calling deps.dev API: ${url}`)
             const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+
             const licenses: string[] = resp.data?.licenses
-            if (!licenses || licenses.length === 0) {
+            let license: LicenseData | null = null
+            if (licenses && licenses.length > 0) {
+                const licenseStr = licenses.join(' AND ')
+                console.log(`deps.dev license for ${purlStr}: ${licenseStr}`)
+                license = this.parseLicenseResponse(licenseStr)
+            } else {
                 console.log(`deps.dev: no licenses found for ${purlStr}`)
-                return null
             }
-            const licenseStr = licenses.join(' AND ')
-            console.log(`deps.dev license for ${purlStr}: ${licenseStr}`)
-            return this.parseLicenseResponse(licenseStr)
+
+            const githubSourceRepo = this.extractGitHubRepoFromLinks(resp.data?.links)
+
+            return { license, githubSourceRepo }
         } catch (error) {
             console.error('Error calling deps.dev API:', (error as Error).message)
-            return null
+            return { license: null, githubSourceRepo: null }
         }
+    }
+
+    private extractGitHubRepoFromLinks (links: any[]) : string | null {
+        if (!links) return null
+        const sourceRepo = links.find(l => l.label === 'SOURCE_REPO')
+        if (!sourceRepo?.url) return null
+        const match = (sourceRepo.url as string).match(/github\.com\/([^/]+\/[^/]+?)(?:\.git)?(?:[/#?].*)?$/)
+        return match ? match[1] : null
+    }
+
+    private parseCopyrightFromLicenseText (text: string) : string | null {
+        const copyrightRegex = /copyright\s+(?:\(c\)|©|\(C\))?\s*\d{4}/i
+        const placeholderRegex = /\[(?:year|yyyy|xxxx|fullname|owner|name|copyright holders?)\]|<(?:year|yyyy|fullname|owner|name|copyright holders?)>/i
+        for (const line of text.split('\n')) {
+            const trimmed = line.trim()
+            if (copyrightRegex.test(trimmed) && !placeholderRegex.test(trimmed)) {
+                return trimmed
+            }
+        }
+        return null
+    }
+
+    private readonly GITHUB_COPYRIGHT_LICENSES = new Set(['MIT', 'BSD-2-Clause', 'BSD-3-Clause', 'BSD-3-Clause-Clear', 'ISC', 'NCSA', 'BSL-1.0'])
+
+    async resolveCopyrightFromGitHub (githubRepo: string, license: LicenseData) : Promise<string | null> {
+        const licenseId = license?.id
+        if (!licenseId || !this.GITHUB_COPYRIGHT_LICENSES.has(licenseId)) return null
+        for (const branch of ['main', 'master']) {
+            try {
+                const url = `https://raw.githubusercontent.com/${githubRepo}/refs/heads/${branch}/LICENSE`
+                console.log(`Fetching GitHub LICENSE: ${url}`)
+                const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+                const copyright = this.parseCopyrightFromLicenseText(resp.data)
+                if (copyright) {
+                    console.log(`GitHub LICENSE copyright (${branch}): ${copyright}`)
+                    return copyright
+                }
+            } catch {
+                // 404 or network error — try next branch
+            }
+        }
+        return null
     }
 
     private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {
