@@ -138,6 +138,14 @@ export class BomMetaService {
         let githubSourceRepo: string | null = null
         if (purl.type === 'npm') {
             const npmResult = await this.resolveOnNpm(purlStr)
+            if (npmResult.notFound) {
+                return {
+                    type: 'library',
+                    name: purlStr,
+                    purl: purlStr,
+                    properties: [{ name: 'reliza:componentMetadata:componentDistribution', value: 'PRIVATE' }]
+                }
+            }
             githubSourceRepo = npmResult.githubSourceRepo
             if (!supplier && npmResult.supplier) {
                 supplier = this.normalizeSupplier(npmResult.supplier)
@@ -351,7 +359,7 @@ export class BomMetaService {
         return `https://api.deps.dev/v3/systems/${system}/packages/${encodedName}/versions/${encodedVersion}`
     }
 
-    async resolveOnNpm (purlStr: string) : Promise<{ supplier: CDX.Models.OrganizationalEntity | null, license: LicenseData | null, githubSourceRepo: string | null }> {
+    async resolveOnNpm (purlStr: string) : Promise<{ supplier: CDX.Models.OrganizationalEntity | null, license: LicenseData | null, githubSourceRepo: string | null, notFound: boolean }> {
         try {
             const purl = PackageURL.fromString(purlStr)
             const packageName = purl.namespace ? `@${purl.namespace}/${purl.name}` : purl.name
@@ -375,10 +383,15 @@ export class BomMetaService {
             const repoUrl: string = resp.data?.repository?.url || ''
             const githubSourceRepo = this.extractGitHubRepoFromRepoUrl(repoUrl)
 
-            return { supplier, license, githubSourceRepo }
+            return { supplier, license, githubSourceRepo, notFound: false }
         } catch (error) {
+            const status = (error as any)?.response?.status
+            if (status === 404) {
+                console.log(`npm registry: package not found (404) for ${purlStr}`)
+                return { supplier: null, license: null, githubSourceRepo: null, notFound: true }
+            }
             console.error('Error calling npm registry:', (error as Error).message)
-            return { supplier: null, license: null, githubSourceRepo: null }
+            return { supplier: null, license: null, githubSourceRepo: null, notFound: false }
         }
     }
 

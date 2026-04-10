@@ -14,6 +14,12 @@ type Component {
     supplier: Supplier
     licenses: [LicenseChoice]
     copyright: String
+    properties: [Property]
+}
+
+type Property {
+    name: String
+    value: String
 }
 
 type LicenseChoice {
