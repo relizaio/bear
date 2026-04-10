@@ -1,7 +1,7 @@
 import { Resolver, Mutation, Args } from '@nestjs/graphql'
 import { UseGuards } from '@nestjs/common'
-import { BomMetaService } from 'src/services/bommeta.service'
-import { ApiKeyGuard } from 'src/guards/api-key.guard'
+import { BomMetaService } from '../services/bommeta.service'
+import { ApiKeyGuard } from '../guards/api-key.guard'
 
 const MAX_BATCH_SIZE = 20
 

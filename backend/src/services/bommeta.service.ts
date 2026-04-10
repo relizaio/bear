@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { runQuery, schema } from '../utils/pgUtils'
-import { BomMeta, LicenseData, SourceType, SourcesData } from 'src/model/Bommeta'
+import { BomMeta, LicenseData, SourceType, SourcesData } from '../model/Bommeta'
 import * as CDX from "@cyclonedx/cyclonedx-library"
 import axios, { AxiosResponse } from 'axios'
 import { PackageURL } from 'packageurl-js'
