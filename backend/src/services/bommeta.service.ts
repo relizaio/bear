@@ -73,15 +73,6 @@ export class BomMetaService {
         return queryRes.rows[0]
     }
 
-    private supplierToJson (supplier: CDX.Models.OrganizationalEntity) {
-        if (!supplier) return null
-        return {
-            name: supplier.name,
-            url: Array.from(supplier.url),
-            contact: Array.from(supplier.contact).map(c => ({ name: c.name, email: c.email, phone: c.phone }))
-        }
-    }
-
     async createBomMeta (purlStr: string, cdxComponent: any, sources: SourcesData) : Promise<BomMeta> {
         if (!purlStr) throw new TypeError("Purl is required for BEAR!")
         const purl = PackageURL.fromString(purlStr)
@@ -141,9 +132,19 @@ export class BomMetaService {
             licenseSource = SourceType.AUTO
         }
         
-        // 4. If we still need supplier, license, or copyright, try ClearlyDefined (single call)
-        // Skip ClearlyDefined for unsupported package types (e.g., apk)
         const purl = PackageURL.fromString(purlStr)
+
+        // 4. If license still missing, try deps.dev
+        if (!license && this.isDepsDotDevSupported(purl.type)) {
+            const depsDevLicense = await this.resolveOnDepsDev(purlStr)
+            if (depsDevLicense) {
+                license = depsDevLicense
+                licenseSource = SourceType.DEPSDEV
+            }
+        }
+
+        // 5. If we still need supplier, license, or copyright, try ClearlyDefined (single call)
+        // Skip ClearlyDefined for unsupported package types (e.g., apk)
         const needSupplierFromCD = !supplier
         const needLicenseFromCD = !license
         const needCopyrightFromCD = !copyright
@@ -291,6 +292,57 @@ export class BomMetaService {
         // Check if type is in the mapping table
         const supportedTypes = ['nuget', 'npm', 'maven', 'pypi', 'gem', 'cargo', 'golang', 'composer', 'cocoapods', 'github']
         return supportedTypes.includes(purlType)
+    }
+
+    private isDepsDotDevSupported (purlType: string) : boolean {
+        const supportedTypes = ['golang', 'gem', 'npm', 'cargo', 'maven', 'pypi', 'nuget']
+        return supportedTypes.includes(purlType)
+    }
+
+    private buildDepsDotDevUrl (purlStr: string) : string {
+        const purl = PackageURL.fromString(purlStr)
+        const systemMap: Record<string, string> = {
+            'golang': 'GO',
+            'gem': 'RUBYGEMS',
+            'npm': 'NPM',
+            'cargo': 'CARGO',
+            'maven': 'MAVEN',
+            'pypi': 'PYPI',
+            'nuget': 'NUGET',
+        }
+        const system = systemMap[purl.type]
+        let packageName: string
+        if (purl.type === 'npm' && purl.namespace) {
+            packageName = `@${purl.namespace}/${purl.name}`
+        } else if (purl.type === 'maven' && purl.namespace) {
+            packageName = `${purl.namespace}:${purl.name}`
+        } else if (purl.type === 'golang' && purl.namespace) {
+            packageName = `${purl.namespace}/${purl.name}`
+        } else {
+            packageName = purl.name
+        }
+        const encodedName = encodeURIComponent(packageName)
+        const encodedVersion = encodeURIComponent(purl.version || '')
+        return `https://api.deps.dev/v3/systems/${system}/packages/${encodedName}/versions/${encodedVersion}`
+    }
+
+    async resolveOnDepsDev (purlStr: string) : Promise<LicenseData | null> {
+        try {
+            const url = this.buildDepsDotDevUrl(purlStr)
+            console.log(`Calling deps.dev API: ${url}`)
+            const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+            const licenses: string[] = resp.data?.licenses
+            if (!licenses || licenses.length === 0) {
+                console.log(`deps.dev: no licenses found for ${purlStr}`)
+                return null
+            }
+            const licenseStr = licenses.join(' AND ')
+            console.log(`deps.dev license for ${purlStr}: ${licenseStr}`)
+            return this.parseLicenseResponse(licenseStr)
+        } catch (error) {
+            console.error('Error calling deps.dev API:', (error as Error).message)
+            return null
+        }
     }
 
     private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {

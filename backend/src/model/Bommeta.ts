@@ -18,6 +18,7 @@ interface LicenseData {
 enum SourceType {
     AUTO = 'AUTO',
     CLEARLYDEFINED = 'CLEARLYDEFINED',
+    DEPSDEV = 'DEPSDEV',
     NUGET = 'NUGET',
     OPENAI = 'OPENAI',
     GEMINI = 'GEMINI'
