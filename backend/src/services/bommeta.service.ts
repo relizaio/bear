@@ -134,11 +134,25 @@ export class BomMetaService {
         
         const purl = PackageURL.fromString(purlStr)
 
-        // 4. Try deps.dev for license (and extract GitHub source repo for later copyright use)
-        let depsDevGithubRepo: string | null = null
-        if (this.isDepsDotDevSupported(purl.type)) {
+        // 4. For npm packages, call npm registry first (supplier, license, github repo)
+        let githubSourceRepo: string | null = null
+        if (purl.type === 'npm') {
+            const npmResult = await this.resolveOnNpm(purlStr)
+            githubSourceRepo = npmResult.githubSourceRepo
+            if (!supplier && npmResult.supplier) {
+                supplier = this.normalizeSupplier(npmResult.supplier)
+                supplierSource = SourceType.NPM
+            }
+            if (!license && npmResult.license) {
+                license = npmResult.license
+                licenseSource = SourceType.NPM
+            }
+        }
+
+        // 5. Try deps.dev for license (and extract GitHub source repo for later copyright use)
+        if ((!githubSourceRepo || !license) && this.isDepsDotDevSupported(purl.type)) {
             const depsDevResult = await this.resolveOnDepsDev(purlStr)
-            depsDevGithubRepo = depsDevResult.githubSourceRepo
+            githubSourceRepo = depsDevResult.githubSourceRepo
             if (!license && depsDevResult.license) {
                 license = depsDevResult.license
                 licenseSource = SourceType.DEPSDEV
@@ -200,8 +214,8 @@ export class BomMetaService {
             }
             
             // Try GitHub LICENSE file if we have a source repo from deps.dev
-            if (!copyright && depsDevGithubRepo && license) {
-                copyright = await this.resolveCopyrightFromGitHub(depsDevGithubRepo, license)
+            if (!copyright && githubSourceRepo && license) {
+                copyright = await this.resolveCopyrightFromGitHub(githubSourceRepo, license)
                 if (copyright) {
                     copyrightSource = SourceType.DEPSDEV
                 }
@@ -337,6 +351,43 @@ export class BomMetaService {
         return `https://api.deps.dev/v3/systems/${system}/packages/${encodedName}/versions/${encodedVersion}`
     }
 
+    async resolveOnNpm (purlStr: string) : Promise<{ supplier: CDX.Models.OrganizationalEntity | null, license: LicenseData | null, githubSourceRepo: string | null }> {
+        try {
+            const purl = PackageURL.fromString(purlStr)
+            const packageName = purl.namespace ? `@${purl.namespace}/${purl.name}` : purl.name
+            const encodedName = encodeURIComponent(packageName)
+            const url = `https://registry.npmjs.org/${encodedName}/${encodeURIComponent(purl.version || '')}`
+            console.log(`Calling npm registry: ${url}`)
+            const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+
+            let supplier: CDX.Models.OrganizationalEntity | null = null
+            const author = resp.data?.author
+            if (author?.name) {
+                supplier = new CDX.Models.OrganizationalEntity({ name: author.name })
+                if (author.url) supplier.url.add(author.url)
+            }
+
+            let license: LicenseData | null = null
+            if (resp.data?.license) {
+                license = this.parseLicenseResponse(resp.data.license)
+            }
+
+            const repoUrl: string = resp.data?.repository?.url || ''
+            const githubSourceRepo = this.extractGitHubRepoFromRepoUrl(repoUrl)
+
+            return { supplier, license, githubSourceRepo }
+        } catch (error) {
+            console.error('Error calling npm registry:', (error as Error).message)
+            return { supplier: null, license: null, githubSourceRepo: null }
+        }
+    }
+
+    private extractGitHubRepoFromRepoUrl (repoUrl: string) : string | null {
+        if (!repoUrl) return null
+        const match = repoUrl.match(/github\.com\/([^/]+\/[^/]+?)(?:\.git)?(?:[/#?].*)?$/)
+        return match ? match[1] : null
+    }
+
     async resolveOnDepsDev (purlStr: string) : Promise<{ license: LicenseData | null, githubSourceRepo: string | null }> {
         try {
             const url = this.buildDepsDotDevUrl(purlStr)
@@ -365,9 +416,7 @@ export class BomMetaService {
     private extractGitHubRepoFromLinks (links: any[]) : string | null {
         if (!links) return null
         const sourceRepo = links.find(l => l.label === 'SOURCE_REPO')
-        if (!sourceRepo?.url) return null
-        const match = (sourceRepo.url as string).match(/github\.com\/([^/]+\/[^/]+?)(?:\.git)?(?:[/#?].*)?$/)
-        return match ? match[1] : null
+        return this.extractGitHubRepoFromRepoUrl(sourceRepo?.url || '')
     }
 
     private parseCopyrightFromLicenseText (text: string) : string | null {

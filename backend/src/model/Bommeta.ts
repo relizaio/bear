@@ -19,6 +19,7 @@ enum SourceType {
     AUTO = 'AUTO',
     CLEARLYDEFINED = 'CLEARLYDEFINED',
     DEPSDEV = 'DEPSDEV',
+    NPM = 'NPM',
     NUGET = 'NUGET',
     OPENAI = 'OPENAI',
     GEMINI = 'GEMINI'
