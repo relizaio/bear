@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common'
 import { GraphQLModule } from '@nestjs/graphql'
 import { EnrichResolver } from './resolvers/enrich.resolver';
 import { BomMetaService } from './services/bommeta.service';
+import { HealthController } from './controllers/health.controller';
 
 @Module({
   imports: [
@@ -12,7 +13,7 @@ import { BomMetaService } from './services/bommeta.service';
       playground: (process.env.BEAR_ENABLE_PLAYGROUND === 'true') ? true : false
     }),
   ],
-  controllers: [],
+  controllers: [HealthController],
   providers: [BomMetaService, EnrichResolver],
 })
 export class AppModule {}
