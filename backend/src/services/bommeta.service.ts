@@ -450,7 +450,7 @@ export class BomMetaService {
             )
             console.debug('Harvest triggered, waiting for processing...')
             
-            const tries = 10;
+            const tries = 3;
             for (let i = 0; i < tries; i++) {
                 await this.sleep(6000)
                 const resp = await axiosClient.get(url + "&force=true")
