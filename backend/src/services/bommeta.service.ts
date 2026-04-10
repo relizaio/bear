@@ -308,7 +308,7 @@ export class BomMetaService {
 
     private isInvalidValue (value: string) : boolean {
         if (!value) return true
-        const invalid = ['OTHER', 'NOASSERTION', 'NONE']
+        const invalid = ['OTHER', 'NOASSERTION', 'NONE', 'NON-STANDARD']
         return invalid.includes(value.toUpperCase())
     }
 
@@ -412,7 +412,12 @@ export class BomMetaService {
             if (licenses && licenses.length > 0) {
                 const licenseStr = licenses.join(' AND ')
                 console.log(`deps.dev license for ${purlStr}: ${licenseStr}`)
-                license = this.parseLicenseResponse(licenseStr)
+                const parsed = this.parseLicenseResponse(licenseStr)
+                if (!this.isInvalidLicense(parsed)) {
+                    license = parsed
+                } else {
+                    console.log(`deps.dev: ignoring invalid license "${licenseStr}" for ${purlStr}`)
+                }
             } else {
                 console.log(`deps.dev: no licenses found for ${purlStr}`)
             }
