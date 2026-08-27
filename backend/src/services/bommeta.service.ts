@@ -345,7 +345,7 @@ export class BomMetaService {
         const system = systemMap[purl.type]
         let packageName: string
         if (purl.type === 'npm' && purl.namespace) {
-            packageName = `@${purl.namespace}/${purl.name}`
+            packageName = this.npmPackageName(purl)
         } else if (purl.type === 'maven' && purl.namespace) {
             packageName = `${purl.namespace}:${purl.name}`
         } else if (purl.type === 'golang' && purl.namespace) {
@@ -361,7 +361,7 @@ export class BomMetaService {
     async resolveOnNpm (purlStr: string) : Promise<{ supplier: CDX.Models.OrganizationalEntity | null, license: LicenseData | null, githubSourceRepo: string | null, notFound: boolean }> {
         try {
             const purl = PackageURL.fromString(purlStr)
-            const packageName = purl.namespace ? `@${purl.namespace}/${purl.name}` : purl.name
+            const packageName = this.npmPackageName(purl)
             const encodedName = encodeURIComponent(packageName)
             const url = `https://registry.npmjs.org/${encodedName}/${encodeURIComponent(purl.version || '')}`
             console.log(`Calling npm registry: ${url}`)
@@ -391,6 +391,16 @@ export class BomMetaService {
             console.error('Error calling npm registry:', (error as Error).message)
             return { supplier: null, license: null, githubSourceRepo: null, notFound: false }
         }
+    }
+
+    // packageurl-js decodes the namespace, so a canonical scoped purl
+    // (pkg:npm/%40scope/name) yields namespace '@scope' - prefixing another
+    // '@' produced '@@scope/name', a guaranteed 404 that mislabeled every
+    // scoped npm package as PRIVATE.
+    private npmPackageName (purl: PackageURL) : string {
+        if (!purl.namespace) return purl.name
+        const ns = purl.namespace.startsWith('@') ? purl.namespace : `@${purl.namespace}`
+        return `${ns}/${purl.name}`
     }
 
     private extractGitHubRepoFromRepoUrl (repoUrl: string) : string | null {
