@@ -109,20 +109,6 @@ describe('BomMetaService', () => {
         })
     })
 
-    describe('parseCopyrightFromLicenseText', () => {
-        it('finds a dated copyright line', () => {
-            const text = 'MIT License\n\nCopyright (c) 2019 Acme Corp\n\nPermission is hereby granted...'
-            expect(service.parseCopyrightFromLicenseText(text)).toBe('Copyright (c) 2019 Acme Corp')
-        })
-        it('skips template placeholders', () => {
-            expect(service.parseCopyrightFromLicenseText('Copyright (c) 2019 [fullname]')).toBeNull()
-            expect(service.parseCopyrightFromLicenseText('Copyright (c) <year> <owner>')).toBeNull()
-        })
-        it('returns null when no dated notice exists', () => {
-            expect(service.parseCopyrightFromLicenseText('Permission is hereby granted')).toBeNull()
-        })
-    })
-
     describe('URL builders', () => {
         it('builds deps.dev URLs with ecosystem-specific package naming', () => {
             expect(service.buildDepsDotDevUrl('pkg:npm/%40angular/core@17.0.0'))
@@ -259,6 +245,47 @@ describe('BomMetaService', () => {
         })
     })
 
+    describe('deterministic registry flows (no AI possible)', () => {
+        it('nuget: supplier, license, and copyright from one catalog chain', async () => {
+            const calls = routeFetch([
+                { match: 'registration5-gz-semver2', json: { catalogEntry: 'https://api.nuget.org/v3/catalog0/data/x.json' } },
+                { match: 'catalog0', json: { authors: 'Contoso', licenseExpression: 'MIT', copyright: '© Contoso 2020' } },
+                { match: 'api.clearlydefined.io', json: {} }
+            ])
+            const result = await service.enrichByPurl('pkg:nuget/Contoso.Lib@1.0.0')
+            expect(result.supplier.name).toBe('Contoso')
+            expect(result.licenses).toEqual([{ license: { id: 'MIT', name: undefined, url: undefined } }])
+            expect(result.copyright).toBe('© Contoso 2020')
+            expect(calls.some(u => u.includes('openai') || u.includes('googleapis'))).toBe(false)
+            const insert = (runQuery as jest.Mock).mock.calls.find(c => c[0].includes('INSERT'))
+            expect(JSON.parse(insert[1][4])).toEqual({
+                supplier: SourceType.NUGET, license: SourceType.NUGET, copyright: SourceType.NUGET
+            })
+        })
+
+        it('maven: supplier from the groupId normalization table without any supplier lookup', async () => {
+            routeFetch([
+                { match: 'repo1.maven.org', text: '<project><licenses><license><name>The Apache Software License, Version 2.0</name></license></licenses></project>' },
+                { match: 'api.deps.dev', json: {} },
+                { match: 'api.clearlydefined.io', json: {} }
+            ])
+            const result = await service.enrichByPurl('pkg:maven/org.apache.logging.log4j/log4j-core@2.24.3')
+            expect(result.supplier.name).toBe('Apache Software Foundation')
+            expect(result.licenses).toEqual([{ license: { id: 'Apache-2.0', name: undefined, url: undefined } }])
+        })
+
+        it('ClearlyDefined multi-candidate copyrights are selected by heuristic, not AI', async () => {
+            routeFetch([
+                { match: 'registry.npmjs.org', json: { author: { name: 'Acme' }, license: 'MIT',
+                    repository: { url: 'https://github.com/acme/pkg' } } },
+                { match: 'api.clearlydefined.io', json: { licensed: { facets: { core: { attribution: {
+                    parties: ['Copyright (c) 2019 Acme', 'All rights reserved.', 'Copyright (c) 2021 Contributors'] } } } } } }
+            ])
+            const result = await service.enrichByPurl('pkg:npm/acme-multi@1.0.0')
+            expect(result.copyright).toBe('Copyright (c) 2019 Acme\nCopyright (c) 2021 Contributors')
+        })
+    })
+
     describe('AI response handling against canned payloads (no key, no network)', () => {
         it('parses a supplier out of an OpenAI-shaped response', async () => {
             routeFetch([
@@ -285,7 +312,12 @@ describe('BomMetaService', () => {
 
         it('returns null when the AI endpoint errors', async () => {
             routeFetch([{ match: 'api.openai.com', status: 500 }])
-            await expect(service.resolveCopyright('pkg:npm/x@1.0.0')).resolves.toBeNull()
+            await expect(service.resolveSupplier('pkg:npm/x@1.0.0')).resolves.toBeNull()
+        })
+
+        it('the AI copyright paths are gone entirely', () => {
+            expect((service as any).resolveCopyright).toBeUndefined()
+            expect((service as any).selectCopyright).toBeUndefined()
         })
     })
 })

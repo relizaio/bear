@@ -4,27 +4,22 @@ import { BomMeta, LicenseData, SourceType, SourcesData } from '../model/Bommeta'
 import * as CDX from "@cyclonedx/cyclonedx-library"
 import { PackageURL } from 'packageurl-js'
 import { getJson, getText, postJson, HttpError } from '../utils/httpUtils'
+import { SUPPLIER_NORMALIZATIONS } from '../data/supplierNormalizations'
+import { COPYRIGHT_EXTRACTABLE_LICENSES, NOTICE_FILE_LICENSES, extractCopyrightLines, selectCopyrights, normalizeLicenseString } from './copyrightHeuristics'
+import { RegistryResult, resolveOnPypi, resolveOnCratesIo, resolveOnRubyGems, resolveOnMavenCentral, resolveOnNuget, resolveGithubOwner, resolveGithubLicense, fetchGithubNotice, hasGithubToken } from './registryResolvers'
 
 const AI_TIMEOUT_MS = 60000
 const AI_TYPE = process.env.BEAR_AI_TYPE // GEMINI or OPENAI
 const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
-const GEMINI_COPYRIGHT_MODEL = process.env.BEAR_GEMINI_COPYRIGHT_MODEL || 'gemini-2.0-flash'
 const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
-const OPENAI_COPYRIGHT_MODEL = process.env.BEAR_OPENAI_COPYRIGHT_MODEL || 'gpt-5.2'
 const CLEARLYDEFINED_API_URI = 'https://api.clearlydefined.io'
-
-const SUPPLIER_NORMALIZATIONS: Record<string, {name: string, url: string}> = {
-    'microsoft': { name: 'Microsoft', url: 'https://www.microsoft.com' },
-}
 
 // AI Prompts - DRY constants for both Gemini and OpenAI
 // All prompts request JSON with a confidence field (0-1 float)
 const CONFIDENCE_THRESHOLD = 0.6
 const AI_PROMPTS = {
     supplier: (purl: string) => `You are a software package expert. Who is the supplier/vendor organization for the software package ${purl}?\n\nIMPORTANT: Return ONLY a JSON object with fields: name (string), url (array of strings), confidence (float 0 to 1 indicating your confidence). Example: {"name": "Acme Corp", "url": ["https://acme.com"], "confidence": 0.95}. If you cannot determine it, return {"confidence": 0}. No explanation, no markdown.`,
-    license: (purl: string) => `You are a software package expert. What is the license for the software package ${purl}?\n\nIMPORTANT: Return ONLY a JSON object with fields: license (string, SPDX identifier e.g. MIT or Apache-2.0), confidence (float 0 to 1 indicating your confidence). Example: {"license": "MIT", "confidence": 0.95}. If you cannot determine it, return {"license": "UNKNOWN", "confidence": 0}. No explanation, no markdown.`,
-    copyrightSelect: (purl: string, copyrightList: string) => `You are a software package expert. Which of the following copyright notices is correct for the software package ${purl}?\n\n${copyrightList}\n\nIMPORTANT: Return ONLY a JSON object with fields: copyright (string, the exact copyright text from the list above), confidence (float 0 to 1 indicating your confidence). Example: {"copyright": "Copyright (c) 2020 Acme Corp", "confidence": 0.9}. If you cannot determine it, return {"copyright": "UNKNOWN", "confidence": 0}. No explanation, no markdown.`,
-    copyrightResolve: (purl: string) => `You are a software package expert with access to package metadata. What is the copyright notice for the software package ${purl}?\n\nIMPORTANT: Return ONLY a JSON object with fields: copyright (string, in the format "Copyright (c) YYYY Name"), confidence (float 0 to 1 indicating your confidence). Example: {"copyright": "Copyright (c) 2020 Acme Corp", "confidence": 0.9}. If you cannot determine it, return {"copyright": "UNKNOWN", "confidence": 0}. No explanation, no markdown.`
+    license: (purl: string) => `You are a software package expert. What is the license for the software package ${purl}?\n\nIMPORTANT: Return ONLY a JSON object with fields: license (string, SPDX identifier e.g. MIT or Apache-2.0), confidence (float 0 to 1 indicating your confidence). Example: {"license": "MIT", "confidence": 0.95}. If you cannot determine it, return {"license": "UNKNOWN", "confidence": 0}. No explanation, no markdown.`
 }
 
 @Injectable()
@@ -156,6 +151,26 @@ export class BomMetaService {
             }
         }
 
+        // 4b. Deterministic ecosystem registry lookups (supplier + license,
+        // and for NuGet the declared copyright too)
+        let registryCopyright: string | null = null
+        if (!supplier || !license || !copyright) {
+            const registryResult = await this.resolveOnEcosystemRegistry(purl)
+            if (registryResult) {
+                if (registryResult.result.copyright) registryCopyright = registryResult.result.copyright
+                if (!supplier && registryResult.result.supplierName) {
+                    const s = new CDX.Models.OrganizationalEntity({ name: registryResult.result.supplierName })
+                    if (registryResult.result.supplierUrl) s.url.add(registryResult.result.supplierUrl)
+                    supplier = this.normalizeSupplier(s)
+                    supplierSource = registryResult.source
+                }
+                if (!license && registryResult.result.license) {
+                    license = this.parseLicenseResponse(registryResult.result.license)
+                    licenseSource = registryResult.source
+                }
+            }
+        }
+
         // 5. Try deps.dev for license (and extract GitHub source repo for later copyright use)
         if ((!githubSourceRepo || !license) && this.isDepsDotDevSupported(purl.type)) {
             const depsDevResult = await this.resolveOnDepsDev(purlStr)
@@ -163,6 +178,37 @@ export class BomMetaService {
             if (!license && depsDevResult.license) {
                 license = depsDevResult.license
                 licenseSource = SourceType.DEPSDEV
+            }
+        }
+
+        // 5b. GitHub (token-gated): license detection with copyright extraction,
+        // and the repo owner as a supplier candidate
+        let githubCopyright: string | null = null
+        if (githubSourceRepo && hasGithubToken()) {
+            if (!license || !copyright) {
+                const ghLicense = await resolveGithubLicense(githubSourceRepo)
+                if (!license && ghLicense.spdxId) {
+                    license = this.parseLicenseResponse(ghLicense.spdxId)
+                    licenseSource = SourceType.GITHUB
+                }
+                const effectiveId = license?.id
+                if (ghLicense.content && effectiveId && COPYRIGHT_EXTRACTABLE_LICENSES.has(effectiveId)) {
+                    githubCopyright = extractCopyrightLines(ghLicense.content)
+                }
+                if (!githubCopyright && effectiveId && NOTICE_FILE_LICENSES.has(effectiveId)) {
+                    const notice = await fetchGithubNotice(githubSourceRepo)
+                    if (notice) githubCopyright = extractCopyrightLines(notice)
+                }
+            }
+            if (!supplier) {
+                const owner = githubSourceRepo.split('/')[0]
+                const ownerResult = await resolveGithubOwner(owner)
+                if (ownerResult.supplierName) {
+                    const s = new CDX.Models.OrganizationalEntity({ name: ownerResult.supplierName })
+                    if (ownerResult.supplierUrl) s.url.add(ownerResult.supplierUrl)
+                    supplier = this.normalizeSupplier(s)
+                    supplierSource = SourceType.GITHUB
+                }
             }
         }
 
@@ -191,7 +237,7 @@ export class BomMetaService {
             console.log(`Package type ${purl.type} is not supported by ClearlyDefined, skipping to AI`)
         }
         
-        // 5. Fallback to AI for supplier and license still missing
+        // 6. Fallback to AI for supplier and license still missing (residue only)
         if (!supplier) {
             supplier = this.normalizeSupplier(await this.resolveSupplier(purlStr))
             supplierSource = AI_TYPE === 'GEMINI' ? SourceType.GEMINI : SourceType.OPENAI
@@ -200,44 +246,32 @@ export class BomMetaService {
             license = await this.resolveLicense(purlStr)
             licenseSource = AI_TYPE === 'GEMINI' ? SourceType.GEMINI : SourceType.OPENAI
         }
-        
-        // 6. Resolve copyright: NuGet -> GitHub LICENSE -> ClearlyDefined -> AI
+
+        // 7. Resolve copyright deterministically: NuGet catalog -> GitHub
+        // license/NOTICE extraction -> raw-LICENSE fallback (no token) ->
+        // ClearlyDefined attribution. No AI: an unresolvable copyright stays
+        // empty rather than becoming a model's guess at a legal notice.
         if (!copyright) {
-            // First, try NuGet for nuget packages
-            if (purl.type === 'nuget') {
-                copyright = await this.resolveCopyrightOnNuget(purlStr)
-                if (copyright) {
-                    copyrightSource = SourceType.NUGET
-                }
+            if (registryCopyright) {
+                copyright = registryCopyright
+                copyrightSource = SourceType.NUGET
             }
 
-            // If GitHub didn't provide copyright, check ClearlyDefined copyrights
-            if (!copyright) {
-                if (cdCopyrights.length === 1) {
-                    // Exactly one copyright - use it directly
-                    copyright = cdCopyrights[0]
-                    copyrightSource = SourceType.CLEARLYDEFINED
-                } 
+            if (!copyright && githubCopyright) {
+                copyright = githubCopyright
+                copyrightSource = SourceType.GITHUB
             }
-            
-            // Try GitHub LICENSE file if we have a source repo from deps.dev
-            if (!copyright && githubSourceRepo && license) {
+
+            // Without a GitHub token, fall back to the raw LICENSE fetch
+            // (raw.githubusercontent.com is not API-rate-limited)
+            if (!copyright && githubSourceRepo && license && !hasGithubToken()) {
                 copyright = await this.resolveCopyrightFromGitHub(githubSourceRepo, license)
-                if (copyright) {
-                    copyrightSource = SourceType.DEPSDEV
-                }
+                if (copyright) copyrightSource = SourceType.GITHUB
             }
 
-            if (!copyright && cdCopyrights.length > 1) {
-                // Multiple copyrights - ask AI to select the correct one
-                copyright = await this.selectCopyright(purlStr, cdCopyrights)
-                copyrightSource = SourceType.CLEARLYDEFINED
-            }
-            
-            // Final fallback to AI if no copyright found
-            if (!copyright) {
-                copyright = await this.resolveCopyright(purlStr)
-                copyrightSource = AI_TYPE === 'GEMINI' ? SourceType.GEMINI : SourceType.OPENAI
+            if (!copyright && cdCopyrights.length) {
+                copyright = selectCopyrights(cdCopyrights)
+                if (copyright) copyrightSource = SourceType.CLEARLYDEFINED
             }
         }
         
@@ -281,9 +315,15 @@ export class BomMetaService {
     }
 
     private getNormalizedSupplier (purlStr: string) : CDX.Models.OrganizationalEntity | null {
-        const purlLower = purlStr.toLowerCase()
+        let purlLower = purlStr.toLowerCase()
+        try {
+            // canonical purls percent-encode scopes (%40scope); match decoded
+            purlLower = decodeURIComponent(purlLower)
+        } catch {
+            // leave undecodable purls as-is
+        }
         for (const [key, value] of Object.entries(SUPPLIER_NORMALIZATIONS)) {
-            if (purlLower.includes(key)) {
+            if (purlLower.includes(key.toLowerCase())) {
                 const supplier = new CDX.Models.OrganizationalEntity({ name: value.name })
                 supplier.url.add(value.url)
                 return supplier
@@ -445,29 +485,15 @@ export class BomMetaService {
         return this.extractGitHubRepoFromRepoUrl(sourceRepo?.url || '')
     }
 
-    private parseCopyrightFromLicenseText (text: string) : string | null {
-        const copyrightRegex = /copyright\s+(?:\(c\)|©|\(C\))?\s*\d{4}/i
-        const placeholderRegex = /\[(?:year|yyyy|xxxx|fullname|owner|name|copyright holders?)\]|<(?:year|yyyy|fullname|owner|name|copyright holders?)>/i
-        for (const line of text.split('\n')) {
-            const trimmed = line.trim()
-            if (copyrightRegex.test(trimmed) && !placeholderRegex.test(trimmed)) {
-                return trimmed
-            }
-        }
-        return null
-    }
-
-    private readonly GITHUB_COPYRIGHT_LICENSES = new Set(['MIT', 'BSD-2-Clause', 'BSD-3-Clause', 'BSD-3-Clause-Clear', 'ISC', 'NCSA', 'BSL-1.0'])
-
     async resolveCopyrightFromGitHub (githubRepo: string, license: LicenseData) : Promise<string | null> {
         const licenseId = license?.id
-        if (!licenseId || !this.GITHUB_COPYRIGHT_LICENSES.has(licenseId)) return null
+        if (!licenseId || !COPYRIGHT_EXTRACTABLE_LICENSES.has(licenseId)) return null
         for (const branch of ['main', 'master']) {
             try {
                 const url = `https://raw.githubusercontent.com/${githubRepo}/refs/heads/${branch}/LICENSE`
                 console.log(`Fetching GitHub LICENSE: ${url}`)
                 const licenseText = await getText(url)
-                const copyright = this.parseCopyrightFromLicenseText(licenseText)
+                const copyright = extractCopyrightLines(licenseText)
                 if (copyright) {
                     console.log(`GitHub LICENSE copyright (${branch}): ${copyright}`)
                     return copyright
@@ -477,6 +503,19 @@ export class BomMetaService {
             }
         }
         return null
+    }
+
+    // Dispatch to the deterministic per-ecosystem registry resolver, tagging
+    // the source the data came from.
+    private async resolveOnEcosystemRegistry (purl: PackageURL) : Promise<{ result: RegistryResult, source: SourceType } | null> {
+        switch (purl.type) {
+            case 'pypi': return { result: await resolveOnPypi(purl), source: SourceType.PYPI }
+            case 'cargo': return { result: await resolveOnCratesIo(purl), source: SourceType.CRATES }
+            case 'gem': return { result: await resolveOnRubyGems(purl), source: SourceType.RUBYGEMS }
+            case 'maven': return { result: await resolveOnMavenCentral(purl), source: SourceType.MAVEN }
+            case 'nuget': return { result: await resolveOnNuget(purl), source: SourceType.NUGET }
+            default: return null
+        }
     }
 
     private mapPurlTypeToClearlyDefined (purlType: string) : {type: string, provider: string} {
@@ -673,77 +712,6 @@ export class BomMetaService {
             return this.parseLicenseResponse(parsed.license)
         } catch (error) {
             console.error('Error calling AI for license:', error.message)
-            return null
-        }
-    }
-
-    async resolveCopyrightOnNuget (purlStr: string) : Promise<string> {
-        try {
-            const purl = PackageURL.fromString(purlStr)
-            if (purl.type !== 'nuget') {
-                return null
-            }
-            
-            const packageName = purl.name.toLowerCase()
-            const version = purl.version
-            
-            // Step 1: Get package registration
-            const registrationUrl = `https://api.nuget.org/v3/registration5-gz-semver2/${packageName}/${version}.json`
-            const registration = await getJson(registrationUrl)
-
-            if (!registration?.catalogEntry) {
-                console.log(`No catalogEntry found for NuGet package ${packageName}@${version}`)
-                return null
-            }
-
-            // Step 2: Get catalog entry
-            const catalog = await getJson(registration.catalogEntry)
-
-            const copyright = catalog?.copyright
-            if (copyright) {
-                console.log(`NuGet copyright for ${packageName}@${version}: ${copyright}`)
-                return copyright
-            }
-            
-            console.log(`No copyright found in NuGet catalog for ${packageName}@${version}`)
-            return null
-        } catch (error) {
-            console.error('Error calling NuGet API for copyright:', error.message)
-            return null
-        }
-    }
-
-    async selectCopyright (purl: string, copyrights: string[]) : Promise<string> {
-        try {
-            const copyrightList = copyrights.map((c, i) => `${i + 1}. ${c}`).join('\n')
-            const copyrightModel = AI_TYPE === 'GEMINI' ? GEMINI_COPYRIGHT_MODEL : OPENAI_COPYRIGHT_MODEL
-            const respText = await this.callAi(AI_PROMPTS.copyrightSelect(purl, copyrightList), copyrightModel, { effort: "medium" })
-            console.log(`AI selected copyright: ${respText}`)
-            const parsed = this.parseAiJson(respText)
-            if (!parsed || !parsed.copyright || parsed.copyright === 'UNKNOWN') {
-                console.log('AI copyright selection is invalid or low confidence, returning null')
-                return null
-            }
-            return parsed.copyright
-        } catch (error) {
-            console.error('Error calling AI for copyright selection:', error.message)
-            return null
-        }
-    }
-
-    async resolveCopyright (purl: string) : Promise<string> {
-        try {
-            const copyrightModel = AI_TYPE === 'GEMINI' ? GEMINI_COPYRIGHT_MODEL : OPENAI_COPYRIGHT_MODEL
-            const respText = await this.callAi(AI_PROMPTS.copyrightResolve(purl), copyrightModel, { effort: "medium" })
-            console.log(`AI copyright response: ${respText}`)
-            const parsed = this.parseAiJson(respText)
-            if (!parsed || !parsed.copyright || parsed.copyright === 'UNKNOWN') {
-                console.log('AI copyright response is invalid or low confidence, returning null')
-                return null
-            }
-            return parsed.copyright
-        } catch (error) {
-            console.error('Error calling AI for copyright:', error.message)
             return null
         }
     }
