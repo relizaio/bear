@@ -2,10 +2,10 @@ import { Injectable } from '@nestjs/common'
 import { runQuery, schema } from '../utils/pgUtils'
 import { BomMeta, LicenseData, SourceType, SourcesData } from '../model/Bommeta'
 import * as CDX from "@cyclonedx/cyclonedx-library"
-import axios, { AxiosResponse } from 'axios'
 import { PackageURL } from 'packageurl-js'
+import { getJson, getText, postJson, HttpError } from '../utils/httpUtils'
 
-const axiosClient = axios.create()
+const AI_TIMEOUT_MS = 60000
 const AI_TYPE = process.env.BEAR_AI_TYPE // GEMINI or OPENAI
 const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
 const GEMINI_COPYRIGHT_MODEL = process.env.BEAR_GEMINI_COPYRIGHT_MODEL || 'gemini-2.0-flash'
@@ -365,27 +365,26 @@ export class BomMetaService {
             const encodedName = encodeURIComponent(packageName)
             const url = `https://registry.npmjs.org/${encodedName}/${encodeURIComponent(purl.version || '')}`
             console.log(`Calling npm registry: ${url}`)
-            const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+            const data = await getJson(url)
 
             let supplier: CDX.Models.OrganizationalEntity | null = null
-            const author = resp.data?.author
+            const author = data?.author
             if (author?.name) {
                 supplier = new CDX.Models.OrganizationalEntity({ name: author.name })
                 if (author.url) supplier.url.add(author.url)
             }
 
             let license: LicenseData | null = null
-            if (resp.data?.license) {
-                license = this.parseLicenseResponse(resp.data.license)
+            if (data?.license) {
+                license = this.parseLicenseResponse(data.license)
             }
 
-            const repoUrl: string = resp.data?.repository?.url || ''
+            const repoUrl: string = data?.repository?.url || ''
             const githubSourceRepo = this.extractGitHubRepoFromRepoUrl(repoUrl)
 
             return { supplier, license, githubSourceRepo, notFound: false }
         } catch (error) {
-            const status = (error as any)?.response?.status
-            if (status === 404) {
+            if (error instanceof HttpError && error.status === 404) {
                 console.log(`npm registry: package not found (404) for ${purlStr}`)
                 return { supplier: null, license: null, githubSourceRepo: null, notFound: true }
             }
@@ -404,9 +403,9 @@ export class BomMetaService {
         try {
             const url = this.buildDepsDotDevUrl(purlStr)
             console.log(`Calling deps.dev API: ${url}`)
-            const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+            const data = await getJson(url)
 
-            const licenses: string[] = resp.data?.licenses
+            const licenses: string[] = data?.licenses
             let license: LicenseData | null = null
             if (licenses && licenses.length > 0) {
                 const licenseStr = licenses.join(' AND ')
@@ -421,7 +420,7 @@ export class BomMetaService {
                 console.log(`deps.dev: no licenses found for ${purlStr}`)
             }
 
-            const githubSourceRepo = this.extractGitHubRepoFromLinks(resp.data?.links)
+            const githubSourceRepo = this.extractGitHubRepoFromLinks(data?.links)
 
             return { license, githubSourceRepo }
         } catch (error) {
@@ -457,8 +456,8 @@ export class BomMetaService {
             try {
                 const url = `https://raw.githubusercontent.com/${githubRepo}/refs/heads/${branch}/LICENSE`
                 console.log(`Fetching GitHub LICENSE: ${url}`)
-                const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
-                const copyright = this.parseCopyrightFromLicenseText(resp.data)
+                const licenseText = await getText(url)
+                const copyright = this.parseCopyrightFromLicenseText(licenseText)
                 if (copyright) {
                     console.log(`GitHub LICENSE copyright (${branch}): ${copyright}`)
                     return copyright
@@ -547,15 +546,15 @@ export class BomMetaService {
             const url = this.buildClearlyDefinedUrl(purlStr)
             console.log(`Calling ClearlyDefined API: ${url}`)
 
-            const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+            const data = await getJson(url)
 
             let supplier: CDX.Models.OrganizationalEntity = null
             let license: LicenseData = null
             let copyrights: string[] = []
             
             // Extract supplier from sourceLocation
-            if (resp.data?.described?.sourceLocation) {
-                const source = resp.data.described.sourceLocation
+            if (data?.described?.sourceLocation) {
+                const source = data.described.sourceLocation
                 if (source.provider === 'github') {
                     supplier = new CDX.Models.OrganizationalEntity({ name: source.namespace })
                     supplier.url.add(`https://github.com/${source.namespace}`)
@@ -563,8 +562,8 @@ export class BomMetaService {
             }
             
             // Extract license
-            if (resp.data?.licensed?.declared) {
-                const declared = resp.data.licensed.declared
+            if (data?.licensed?.declared) {
+                const declared = data.licensed.declared
                 if (declared.includes(' AND ') || declared.includes(' OR ')) {
                     license = { expression: declared }
                 } else {
@@ -573,8 +572,8 @@ export class BomMetaService {
             }
             
             // Extract copyrights from facets.core.attribution.parties
-            if (resp.data?.licensed?.facets?.core?.attribution?.parties) {
-                copyrights = resp.data.licensed.facets.core.attribution.parties
+            if (data?.licensed?.facets?.core?.attribution?.parties) {
+                copyrights = data.licensed.facets.core.attribution.parties
             }
             
             return { supplier, license, copyrights }
@@ -586,21 +585,18 @@ export class BomMetaService {
 
     private async callGemini (prompt: string, model?: string) : Promise<string> {
         const geminiModel = model || 'gemini-2.0-flash'
-        const resp: AxiosResponse = await axiosClient.post(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
+        const data = await postJson(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
             {
                 contents: [{
                   "parts":[{"text": prompt}]
                 }]
             },
             {
-                headers: {
-                    'x-goog-api-key': GEMINI_API_KEY,
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json'
-                }
+                timeoutMs: AI_TIMEOUT_MS,
+                headers: { 'x-goog-api-key': GEMINI_API_KEY }
             }
         )
-        return resp.data.candidates[0].content.parts[0].text.trim()
+        return data.candidates[0].content.parts[0].text.trim()
     }
 
     private async callOpenai (prompt: string, model?: string, reasoning?: { effort: string }) : Promise<string> {
@@ -611,18 +607,15 @@ export class BomMetaService {
         } else {
             body.temperature = 0.2
         }
-        const resp: AxiosResponse = await axiosClient.post('https://api.openai.com/v1/responses',
+        const data = await postJson('https://api.openai.com/v1/responses',
             body,
             {
-                headers: {
-                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json'
-                }
+                timeoutMs: AI_TIMEOUT_MS,
+                headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` }
             }
         )
         // Find the message object in the output array (skip reasoning objects)
-        const messageOutput = resp.data.output.find((item: any) => item.type === 'message')
+        const messageOutput = data.output.find((item: any) => item.type === 'message')
         if (!messageOutput || !messageOutput.content || messageOutput.content.length === 0) {
             throw new Error('No message content found in OpenAI response')
         }
@@ -686,22 +679,17 @@ export class BomMetaService {
             
             // Step 1: Get package registration
             const registrationUrl = `https://api.nuget.org/v3/registration5-gz-semver2/${packageName}/${version}.json`
-            const registrationResp: AxiosResponse = await axiosClient.get(registrationUrl, {
-                headers: { 'Accept-Encoding': 'gzip, deflate' }
-            })
-            
-            if (!registrationResp.data?.catalogEntry) {
+            const registration = await getJson(registrationUrl)
+
+            if (!registration?.catalogEntry) {
                 console.log(`No catalogEntry found for NuGet package ${packageName}@${version}`)
                 return null
             }
-            
+
             // Step 2: Get catalog entry
-            const catalogUrl = registrationResp.data.catalogEntry
-            const catalogResp: AxiosResponse = await axiosClient.get(catalogUrl, {
-                headers: { 'Accept-Encoding': 'gzip, deflate' }
-            })
-            
-            const copyright = catalogResp.data?.copyright
+            const catalog = await getJson(registration.catalogEntry)
+
+            const copyright = catalog?.copyright
             if (copyright) {
                 console.log(`NuGet copyright for ${packageName}@${version}: ${copyright}`)
                 return copyright
