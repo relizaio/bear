@@ -5,6 +5,9 @@ COPY package*.json ./
 RUN npm ci --ignore-scripts
 COPY ./ .
 RUN npm run build
+# The image build is the test gate: a red suite fails the build and
+# therefore the release. The suite needs no network, database, or AI key.
+RUN npm test
 # Reduce to production dependencies for the runtime image (lockfile-exact)
 RUN npm ci --omit=dev --ignore-scripts
 
