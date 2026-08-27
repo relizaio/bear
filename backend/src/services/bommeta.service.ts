@@ -11,8 +11,7 @@ const GEMINI_API_KEY = process.env.BEAR_GEMINI_API_KEY
 const GEMINI_COPYRIGHT_MODEL = process.env.BEAR_GEMINI_COPYRIGHT_MODEL || 'gemini-2.0-flash'
 const OPENAI_API_KEY = process.env.BEAR_OPENAI_API_KEY
 const OPENAI_COPYRIGHT_MODEL = process.env.BEAR_OPENAI_COPYRIGHT_MODEL || 'gpt-5.2'
-const CLEARLYDEFINED_API_URI = process.env.BEAR_CLEARLYDEFINED_API_URI || 'https://api.clearlydefined.io'
-const IS_PUBLIC_CLEARLYDEFINED = CLEARLYDEFINED_API_URI === 'https://api.clearlydefined.io'
+const CLEARLYDEFINED_API_URI = 'https://api.clearlydefined.io'
 
 const SUPPLIER_NORMALIZATIONS: Record<string, {name: string, url: string}> = {
     'microsoft': { name: 'Microsoft', url: 'https://www.microsoft.com' },
@@ -487,31 +486,13 @@ export class BomMetaService {
         return mapping[purlType] || { type: purlType, provider: purlType }
     }
 
-    private buildClearlyDefinedUrl (purlStr: string, baseUrl?: string) : string {
+    private buildClearlyDefinedUrl (purlStr: string) : string {
         const purl = PackageURL.fromString(purlStr)
         const { type, provider } = this.mapPurlTypeToClearlyDefined(purl.type)
         const namespace = purl.namespace || '-'
         const name = purl.name
         const revision = purl.version || '-'
-        const apiUri = baseUrl || CLEARLYDEFINED_API_URI
-        return `${apiUri}/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
-    }
-
-    private buildClearlyDefinedCoordinates (purlStr: string) : string {
-        const purl = PackageURL.fromString(purlStr)
-        const { type, provider } = this.mapPurlTypeToClearlyDefined(purl.type)
-        const namespace = purl.namespace || '-'
-        const name = purl.name
-        const revision = purl.version || '-'
-        return `${type}/${provider}/${namespace}/${name}/${revision}`
-    }
-
-    private async sleep (ms: number) : Promise<void> {
-        return new Promise(resolve => setTimeout(resolve, ms))
-    }
-
-    private hasValidScore (data: any) : boolean {
-        return data?.described?.score?.total > 0 || data?.licensed?.score?.total > 0
+        return `${CLEARLYDEFINED_API_URI}/definitions/${type}/${provider}/${namespace}/${name}/${revision}?expand=-files`
     }
 
     private isInvalidResponse (response: string) : boolean {
@@ -561,71 +542,13 @@ export class BomMetaService {
         }
     }
 
-    private async triggerHarvestAndRetry (purlStr: string, url: string) : Promise<AxiosResponse> {
-        console.debug('Score is zero, triggering harvest...')
-        const coordinates = this.buildClearlyDefinedCoordinates(purlStr)
-        const harvestUrl = `${CLEARLYDEFINED_API_URI}/harvest`
-        const harvestPayload = [{ coordinates }]
-        
-        try {
-            console.debug(`Harvest POST request: ${harvestUrl}`)
-            console.debug(`Harvest payload: ${JSON.stringify(harvestPayload)}`)
-            
-            await axiosClient.post(harvestUrl, harvestPayload, 
-                { headers: { 'Content-Type': 'application/json' } }
-            )
-            console.debug('Harvest triggered, waiting for processing...')
-            
-            const tries = 3;
-            for (let i = 0; i < tries; i++) {
-                await this.sleep(6000)
-                const resp = await axiosClient.get(url + "&force=true")
-                
-                if (this.hasValidScore(resp.data)) {
-                    console.debug(`Valid score received after ${i + 1} retries`)
-                    return resp
-                }
-                console.debug(`Retry ${i + 1}/${tries}: Still no valid score`)
-            }
-            
-            // Fall back to original URL
-            return await axiosClient.get(url)
-        } catch (harvestError) {
-            console.error('Error triggering harvest:', harvestError.message)
-            return await axiosClient.get(url)
-        }
-    }
-
     async resolveOnClearlyDefined (purlStr: string) : Promise<{supplier: CDX.Models.OrganizationalEntity, license: LicenseData, copyrights: string[]}> {
         try {
             const url = this.buildClearlyDefinedUrl(purlStr)
             console.log(`Calling ClearlyDefined API: ${url}`)
-            
-            let resp: AxiosResponse = await axiosClient.get(url)
-            
-            // Step 2: If no valid score, try public ClearlyDefined API with 10s timeout
-            if (!this.hasValidScore(resp.data)) {
-                try {
-                    const publicUrl = this.buildClearlyDefinedUrl(purlStr, 'https://api.clearlydefined.io')
-                    console.log(`No valid score from private API, calling public ClearlyDefined API: ${publicUrl}`)
-                    const publicResp = await axiosClient.get(publicUrl, { timeout: 10000 })
-                    
-                    if (this.hasValidScore(publicResp.data)) {
-                        console.log('Public ClearlyDefined API returned valid score, using that')
-                        resp = publicResp
-                    } else {
-                        console.log('Public ClearlyDefined API has no valid score either')
-                    }
-                } catch (publicError) {
-                    console.error('Error calling public ClearlyDefined API:', publicError.message)
-                }
-            }
-            
-            // Step 3: If still no valid score and using non-public API, trigger harvest and retry
-            if (!IS_PUBLIC_CLEARLYDEFINED && !this.hasValidScore(resp.data)) {
-                resp = await this.triggerHarvestAndRetry(purlStr, url)
-            }
-            
+
+            const resp: AxiosResponse = await axiosClient.get(url, { timeout: 10000 })
+
             let supplier: CDX.Models.OrganizationalEntity = null
             let license: LicenseData = null
             let copyrights: string[] = []

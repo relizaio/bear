@@ -13,13 +13,11 @@ You need a Google Gemini AI or an OpenAI API Key.
 BEAR_GEMINI_API_KEY="your_actual_api_key"
 BEAR_OPENAI_API_KEY="your_actual_api_key"
 BEAR_AI_TYPE="OPENAI"
-BEAR_CLEARLYDEFINED_API_URI="https://api.clearlydefined.io"
 BEAR_GEMINI_COPYRIGHT_MODEL="gemini-2.0-flash-thinking-exp"
 BEAR_OPENAI_COPYRIGHT_MODEL="o1"
 ```
 
 Optional environment variables:
-- `BEAR_CLEARLYDEFINED_API_URI`: Use a custom ClearlyDefined instance. Defaults to `https://api.clearlydefined.io`. When using a non-public instance, BEAR will automatically try the public API as fallback, then trigger the harvest endpoint for packages with zero scores and retry up to 10 times.
 - `BEAR_GEMINI_COPYRIGHT_MODEL`: Gemini model for copyright selection/resolution. Defaults to `gemini-2.0-flash`. Use `gemini-2.0-flash-thinking-exp` or other thinking models for better accuracy when selecting from multiple copyright options.
 - `BEAR_OPENAI_COPYRIGHT_MODEL`: OpenAI model for copyright selection/resolution. Defaults to `gpt-5.2`. Use `o1` or other reasoning models for better accuracy when selecting from multiple copyright options.
 

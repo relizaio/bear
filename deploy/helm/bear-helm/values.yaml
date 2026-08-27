@@ -4,7 +4,6 @@ gemini_api_key: "placeholder"
 openai_api_key: "placeholder"
 api_key_hash: "placeholder"
 aiType: "OPENAI"
-clearlyDefinedApiUri: ""
 useDefaultPostgrePass: true
 create_secret_in_chart: "regular"
 sealed_secrets_scope: "namespace-wide"
