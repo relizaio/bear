@@ -1,25 +1,36 @@
-FROM node:24.14.1-alpine3.23@sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b AS builder
+FROM node:24.20.0-alpine3.23@sha256:0388af2af070cd4736a1567cfed02469ba117848845b4165d87a333edb53d2ca AS builder
 RUN mkdir /app
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci --ignore-scripts
 COPY ./ .
 RUN npm run build
+# The image build is the test gate: a red suite fails the build and
+# therefore the release. The suite needs no network, database, or AI key.
+RUN npm test
+# Reduce to production dependencies for the runtime image (lockfile-exact)
+RUN npm ci --omit=dev --ignore-scripts
 
-FROM node:24.14.1-alpine3.23@sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b AS package
+FROM node:24.20.0-alpine3.23@sha256:0388af2af070cd4736a1567cfed02469ba117848845b4165d87a333edb53d2ca AS package
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
+# Pick up Alpine security fixes newer than the base image (e.g. openssl)
+RUN apk upgrade --no-cache libcrypto3 libssl3
+# The runtime only executes node; drop the bundled npm and yarn toolchains
+# so their vendored dependencies stop surfacing in image scans
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+    /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 RUN mkdir /app && echo "version=$VERSION" > /app/version && echo "commit=$GIT_COMMIT" >> /app/version && echo "branch=$GIT_BRANCH" >> /app/version
 WORKDIR /app
 RUN addgroup -S apprunner && adduser -S apprunner -G apprunner && chown apprunner:apprunner -R /app
 COPY --chown=apprunner:apprunner package*.json ./
+COPY --from=builder --chown=apprunner:apprunner /app/node_modules ./node_modules
 COPY --from=builder --chown=apprunner:apprunner /app/dist ./
 COPY --chown=apprunner:apprunner src/schema.graphql /app/src/
 COPY --chown=apprunner:apprunner migrations /app/migrations
 USER apprunner
-RUN npm install --omit=dev
 
 LABEL git_commit=$GIT_COMMIT
 LABEL git_branch=$GIT_BRANCH
