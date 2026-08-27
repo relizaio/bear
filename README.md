@@ -192,7 +192,7 @@ All AI responses are requested as JSON with a `confidence` field (float 0-1). BE
 
 ### AI Model Selection
 
-- Uses default models (`gemini-2.0-flash`, `gpt-5.2`), applied only to the
+- Uses default models (`gemini-2.0-flash`, `gpt-5.4`), applied only to the
   supplier/license residue that every deterministic source has passed on.
   Copyright resolution uses no AI.
 

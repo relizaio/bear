@@ -649,7 +649,7 @@ export class BomMetaService {
     }
 
     private async callOpenai (prompt: string, model?: string, reasoning?: { effort: string }) : Promise<string> {
-        const openaiModel = model || 'gpt-5.2'
+        const openaiModel = model || 'gpt-5.4'
         const body: any = { model: openaiModel, input: prompt }
         if (reasoning) {
             body.reasoning = reasoning
