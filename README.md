@@ -72,12 +72,15 @@ BEAR uses a multi-tiered resolution strategy for enriching BOM components with s
        ↓ (if not found)
 2. AUTO Resolution (data-driven normalization table)
    └─ src/data/supplierNormalizations.ts: npm scopes, maven groupIds,
-      pypi namespaces, vendor keywords (e.g. "@angular/" → Google)
+      pypi namespaces, vendor keywords, container-base binaries
+      (pkg:generic busybox applets, musl, OpenSSL libs, ...); entries may
+      also pin an unambiguous license
        ↓ (if not found)
 3. Ecosystem Registry
-   └─ npm author / PyPI author / crates.io owner / RubyGems authors /
-      Maven POM <organization> / NuGet catalog authors
-   └─ Source: NPM, PYPI, CRATES, RUBYGEMS, MAVEN, or NUGET
+   └─ npm author (email-shaped author names rejected) / PyPI author /
+      crates.io owner / RubyGems authors / Maven POM <organization> /
+      NuGet catalog authors / Alpine APKINDEX maintainer (apk)
+   └─ Source: NPM, PYPI, CRATES, RUBYGEMS, MAVEN, NUGET, or ALPINE
        ↓ (if not found)
 4. GitHub Repo Owner (requires BEAR_GITHUB_TOKEN)
    └─ /orgs/{owner} (fallback /users/{owner}) of the source repo
@@ -104,10 +107,10 @@ BEAR uses a multi-tiered resolution strategy for enriching BOM components with s
        ↓ (if not found)
 3. Ecosystem Registry
    └─ npm license / PyPI classifiers / crates.io / RubyGems / Maven POM
-      <licenses> / NuGet licenseExpression
+      <licenses> / NuGet licenseExpression / Alpine APKINDEX L: field (apk)
    └─ Free-text names normalized to SPDX via an explicit, unambiguous-only
       mapping table (a wrong SPDX id is worse than none)
-   └─ Source: NPM, PYPI, CRATES, RUBYGEMS, MAVEN, or NUGET
+   └─ Source: NPM, PYPI, CRATES, RUBYGEMS, MAVEN, NUGET, or ALPINE
        ↓ (if not found)
 4. deps.dev, then GitHub License Detection (requires BEAR_GITHUB_TOKEN)
    └─ /repos/{owner}/{repo}/license returns the SPDX id detected on the
@@ -162,7 +165,7 @@ BEAR uses a multi-tiered resolution strategy for enriching BOM components with s
 
 Each resolved field is tagged with its source:
 - `AUTO`: Normalization table or hardcoded rule
-- `NPM` / `PYPI` / `CRATES` / `RUBYGEMS` / `MAVEN` / `NUGET`: ecosystem registry
+- `NPM` / `PYPI` / `CRATES` / `RUBYGEMS` / `MAVEN` / `NUGET` / `ALPINE`: ecosystem registry (ALPINE = Alpine's APKINDEX, cached per branch/repo/arch)
 - `GITHUB`: GitHub API (owner profile, license detection, license/NOTICE extraction)
 - `DEPSDEV`: deps.dev API
 - `CLEARLYDEFINED`: ClearlyDefined API

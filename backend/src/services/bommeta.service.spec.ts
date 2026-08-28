@@ -143,12 +143,12 @@ describe('BomMetaService', () => {
 
     describe('supplier normalization', () => {
         it('normalizes known suppliers from the purl', () => {
-            const s = service.getNormalizedSupplier('pkg:nuget/Microsoft.Extensions.Logging@8.0.0')
-            expect(s.name).toBe('Microsoft')
-            expect(Array.from(s.url)).toContain('https://www.microsoft.com')
+            const n = service.getNormalization('pkg:nuget/Microsoft.Extensions.Logging@8.0.0')
+            expect(n.name).toBe('Microsoft')
+            expect(n.url).toBe('https://www.microsoft.com')
         })
         it('returns null for unknown suppliers', () => {
-            expect(service.getNormalizedSupplier('pkg:npm/leftpad@1.0.0')).toBeNull()
+            expect(service.getNormalization('pkg:npm/leftpad@1.0.0')).toBeNull()
         })
         it('normalizes a resolved supplier by name', () => {
             const input = { name: 'microsoft corp', url: new Set<string>() }
@@ -283,6 +283,74 @@ describe('BomMetaService', () => {
             ])
             const result = await service.enrichByPurl('pkg:npm/acme-multi@1.0.0')
             expect(result.copyright).toBe('Copyright (c) 2019 Acme\nCopyright (c) 2021 Contributors')
+        })
+    })
+
+    describe('normalization-table and guard flows', () => {
+        it('ssl_client generic resolves supplier AND license from the table, zero AI', async () => {
+            const calls = routeFetch([])   // no network should be needed for supplier/license
+            const result = await service.enrichByPurl('pkg:generic/ssl_client')
+            expect(result.supplier.name).toBe('BusyBox')
+            expect(result.licenses).toEqual([{ license: { id: 'GPL-2.0-only', name: undefined, url: undefined } }])
+            expect(calls.some(u => u.includes('openai') || u.includes('googleapis'))).toBe(false)
+            const insert = (runQuery as jest.Mock).mock.calls.find(c => c[0].includes('INSERT'))
+            const sources = JSON.parse(insert[1][4])
+            expect(sources.supplier).toBe(SourceType.AUTO)
+            expect(sources.license).toBe(SourceType.AUTO)
+        })
+
+        it('email-shaped npm author is rejected as supplier', async () => {
+            routeFetch([
+                { match: 'registry.npmjs.org', json: { author: { name: 'packages@apollographql.com' }, license: 'MIT',
+                    repository: { url: 'https://github.com/apollographql/apollo-client' } } },
+                { match: 'api.clearlydefined.io', json: {} },
+                { match: 'api.openai.com', status: 401 }
+            ])
+            const result = await service.enrichByPurl('pkg:npm/some-apollo-helper@1.0.0')
+            // npm author skipped; CD empty; AI fails closed -> null, never the email
+            expect(result.supplier).toBeNull()
+        })
+
+        it('@apollo/ scope resolves from the table before the npm author is even consulted', async () => {
+            routeFetch([
+                { match: 'registry.npmjs.org', json: { author: { name: 'packages@apollographql.com' }, license: 'MIT' } },
+                { match: 'api.clearlydefined.io', json: {} }
+            ])
+            const result = await service.enrichByPurl('pkg:npm/%40apollo/client@4.2.12')
+            expect(result.supplier.name).toBe('Apollo GraphQL, Inc.')
+        })
+
+        it('apk resolves license and maintainer from the Alpine index', async () => {
+            const zlibMod = require('node:zlib')
+            const idx = 'C:Q1x=\nP:pcre2\nV:10.47-r1\nL:BSD-3-Clause\nm:Jane Alpine <j@a.org>\nU:https://pcre2.example\n'
+            const header = Buffer.alloc(512)
+            header.write('APKINDEX', 0)
+            header.write(Buffer.byteLength(idx).toString(8).padStart(11, '0') + '\0', 124)
+            let sum = 0; header.write('        ', 148)
+            for (const b of header) sum += b
+            header.write(sum.toString(8).padStart(6, '0') + '\0 ', 148)
+            const content = Buffer.alloc(Math.ceil(Buffer.byteLength(idx) / 512) * 512)
+            content.write(idx)
+            const gz = zlibMod.gzipSync(Buffer.concat([header, content, Buffer.alloc(1024)]))
+            routeFetch([
+                { match: 'dl-cdn.alpinelinux.org', json: null, text: null } as any,
+                { match: 'api.openai.com', status: 401 }
+            ])
+            // override: alpine fetch needs arrayBuffer of the gz
+            const inner = global.fetch as jest.Mock
+            const prev = inner.getMockImplementation()
+            inner.mockImplementation(async (url: string, init: any) => {
+                if (url.includes('dl-cdn.alpinelinux.org')) {
+                    return { ok: true, status: 200, arrayBuffer: async () => gz.buffer.slice(gz.byteOffset, gz.byteOffset + gz.byteLength) }
+                }
+                return prev(url, init)
+            })
+            const result = await service.enrichByPurl('pkg:apk/alpine/pcre2@10.47-r1?arch=x86_64&distro=alpine-3.24.1')
+            expect(result.licenses).toEqual([{ license: { id: 'BSD-3-Clause', name: undefined, url: undefined } }])
+            expect(result.supplier.name).toBe('Jane Alpine')
+            const insert = (runQuery as jest.Mock).mock.calls.find(c => c[0].includes('INSERT'))
+            const sources = JSON.parse(insert[1][4])
+            expect(sources.license).toBe(SourceType.ALPINE)
         })
     })
 
