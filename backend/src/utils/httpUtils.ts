@@ -36,6 +36,11 @@ export async function getJson<T = any> (url: string, opts?: HttpOptions) : Promi
     return await resp.json() as T
 }
 
+export async function getBuffer (url: string, opts?: HttpOptions) : Promise<Buffer> {
+    const resp = await request(url, { method: 'GET' }, opts)
+    return Buffer.from(await resp.arrayBuffer())
+}
+
 export async function getText (url: string, opts?: HttpOptions) : Promise<string> {
     const resp = await request(url, { method: 'GET' }, opts)
     return await resp.text()

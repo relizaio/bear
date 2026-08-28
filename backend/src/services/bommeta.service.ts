@@ -4,8 +4,9 @@ import { BomMeta, LicenseData, SourceType, SourcesData } from '../model/Bommeta'
 import * as CDX from "@cyclonedx/cyclonedx-library"
 import { PackageURL } from 'packageurl-js'
 import { getJson, getText, postJson, HttpError } from '../utils/httpUtils'
-import { SUPPLIER_NORMALIZATIONS } from '../data/supplierNormalizations'
+import { SUPPLIER_NORMALIZATIONS, NormalizedSupplier } from '../data/supplierNormalizations'
 import { COPYRIGHT_EXTRACTABLE_LICENSES, NOTICE_FILE_LICENSES, extractCopyrightLines, selectCopyrights, normalizeLicenseString } from './copyrightHeuristics'
+import { resolveOnAlpine } from './alpineResolver'
 import { RegistryResult, resolveOnPypi, resolveOnCratesIo, resolveOnRubyGems, resolveOnMavenCentral, resolveOnNuget, resolveGithubOwner, resolveGithubLicense, fetchGithubNotice, hasGithubToken } from './registryResolvers'
 
 const AI_TIMEOUT_MS = 60000
@@ -114,12 +115,16 @@ export class BomMetaService {
         }
         
         // 3. Check for AUTO resolution first (before ClearlyDefined)
-        if (!supplier) {
-            const normalized = this.getNormalizedSupplier(purlStr)
-            if (normalized) {
-                supplier = normalized
-                supplierSource = SourceType.AUTO
-            }
+        const normalization = this.getNormalization(purlStr)
+        if (!supplier && normalization) {
+            const s = new CDX.Models.OrganizationalEntity({ name: normalization.name })
+            s.url.add(normalization.url)
+            supplier = s
+            supplierSource = SourceType.AUTO
+        }
+        if (!license && normalization?.license) {
+            license = this.parseLicenseResponse(normalization.license)
+            licenseSource = SourceType.AUTO
         }
         if (!license && purlStr.includes('Microsoft.AspNetCore')) {
             license = { id: 'MIT' }
@@ -314,7 +319,7 @@ export class BomMetaService {
         }
     }
 
-    private getNormalizedSupplier (purlStr: string) : CDX.Models.OrganizationalEntity | null {
+    private getNormalization (purlStr: string) : NormalizedSupplier | null {
         let purlLower = purlStr.toLowerCase()
         try {
             // canonical purls percent-encode scopes (%40scope); match decoded
@@ -323,11 +328,7 @@ export class BomMetaService {
             // leave undecodable purls as-is
         }
         for (const [key, value] of Object.entries(SUPPLIER_NORMALIZATIONS)) {
-            if (purlLower.includes(key.toLowerCase())) {
-                const supplier = new CDX.Models.OrganizationalEntity({ name: value.name })
-                supplier.url.add(value.url)
-                return supplier
-            }
+            if (purlLower.includes(key.toLowerCase())) return value
         }
         return null
     }
@@ -409,7 +410,9 @@ export class BomMetaService {
 
             let supplier: CDX.Models.OrganizationalEntity | null = null
             const author = data?.author
-            if (author?.name) {
+            // an email-shaped author name is contact data, not a supplier;
+            // skip it so the GitHub-owner / AI steps get a chance instead
+            if (author?.name && !/^\S+@\S+\.\S+$/.test(author.name.trim())) {
                 supplier = new CDX.Models.OrganizationalEntity({ name: author.name })
                 if (author.url) supplier.url.add(author.url)
             }
@@ -514,6 +517,10 @@ export class BomMetaService {
             case 'gem': return { result: await resolveOnRubyGems(purl), source: SourceType.RUBYGEMS }
             case 'maven': return { result: await resolveOnMavenCentral(purl), source: SourceType.MAVEN }
             case 'nuget': return { result: await resolveOnNuget(purl), source: SourceType.NUGET }
+            case 'apk': {
+                const alpine = await resolveOnAlpine(purl)
+                return { result: { supplierName: alpine.maintainerName, license: alpine.license }, source: SourceType.ALPINE }
+            }
             default: return null
         }
     }

@@ -21,6 +21,7 @@ enum SourceType {
     DEPSDEV = 'DEPSDEV',
     NPM = 'NPM',
     NUGET = 'NUGET',
+    ALPINE = 'ALPINE',
     PYPI = 'PYPI',
     CRATES = 'CRATES',
     RUBYGEMS = 'RUBYGEMS',
