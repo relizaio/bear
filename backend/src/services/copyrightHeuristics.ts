@@ -16,18 +16,24 @@ export const COPYRIGHT_EXTRACTABLE_LICENSES = new Set([
 export const NOTICE_FILE_LICENSES = new Set(['Apache-2.0'])
 
 const COPYRIGHT_LINE = /copyright\s+(?:\(c\)|©|\(C\))?\s*\d{4}/i
+// Undated notices are common in corporate license files ("Copyright (c)
+// Microsoft Corporation."). Accepted only from license/NOTICE text, and only
+// when the (c)/© marker is present and a named holder follows - the marker
+// requirement keeps prose like "the above copyright notice" out.
+const UNDATED_COPYRIGHT_LINE = /^copyright\s+(?:\(c\)|©)\s+\S.*[a-z]/i
 const PLACEHOLDER = /\[(?:year|yyyy|xxxx|fullname|owner|name|copyright holders?)\]|<(?:year|yyyy|fullname|owner|name|copyright holders?)>/i
 
-// Extract every real, dated copyright line from a license or NOTICE text.
-// Long-lived projects and forks legitimately stack several notices; keep
-// them all (newline-joined) rather than silently choosing one.
+// Extract every real copyright line from a license or NOTICE text - dated,
+// or undated with an explicit (c)/© marker and named holder. Long-lived
+// projects and forks legitimately stack several notices; keep them all
+// (newline-joined) rather than silently choosing one.
 export function extractCopyrightLines (text: string) : string | null {
     if (!text) return null
     const seen = new Set<string>()
     const lines: string[] = []
     for (const raw of text.split('\n')) {
         const line = raw.trim()
-        if (!COPYRIGHT_LINE.test(line) || PLACEHOLDER.test(line)) continue
+        if (!(COPYRIGHT_LINE.test(line) || UNDATED_COPYRIGHT_LINE.test(line)) || PLACEHOLDER.test(line)) continue
         const key = line.toLowerCase().replace(/\s+/g, ' ')
         if (seen.has(key)) continue
         seen.add(key)
@@ -38,7 +44,10 @@ export function extractCopyrightLines (text: string) : string | null {
 
 // Deterministic replacement for AI candidate selection (e.g. ClearlyDefined
 // attribution parties): drop undated noise and near-duplicates, keep every
-// surviving distinct notice.
+// surviving distinct notice. Unlike license-file extraction above, the dated
+// requirement stays strict here: attribution candidate lists are scraped
+// from many files and full of undated fragments, so the year is the signal
+// separating a real notice from noise.
 export function selectCopyrights (candidates: string[]) : string | null {
     if (!candidates || !candidates.length) return null
     const seen = new Set<string>()

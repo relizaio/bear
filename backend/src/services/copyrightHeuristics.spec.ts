@@ -18,10 +18,22 @@ describe('copyrightHeuristics', () => {
             const text = 'Copyright (c) 2020 Acme\nCopyright (c)  2020  Acme'
             expect(extractCopyrightLines(text)).toBe('Copyright (c) 2020 Acme')
         })
-        it('rejects template placeholders and undated lines', () => {
+        it('accepts undated notices that carry the (c) marker and a named holder', () => {
+            // the @types/node case: DefinitelyTyped's LICENSE notice has no year
+            expect(extractCopyrightLines('MIT License\n\nCopyright (c) Microsoft Corporation.\n\nPermission is hereby granted...'))
+                .toBe('Copyright (c) Microsoft Corporation.')
+            expect(extractCopyrightLines('Copyright © Meta Platforms, Inc. and affiliates.'))
+                .toBe('Copyright © Meta Platforms, Inc. and affiliates.')
+        })
+        it('still rejects undated lines without the marker, prose mentions, and bare markers', () => {
+            expect(extractCopyrightLines('Copyright Acme Corp. All rights reserved.')).toBeNull()
+            expect(extractCopyrightLines('The above copyright notice shall be included in all copies')).toBeNull()
+            expect(extractCopyrightLines('Copyright (c)')).toBeNull()
+        })
+        it('rejects template placeholders, dated or not', () => {
             expect(extractCopyrightLines('Copyright (c) 2019 [fullname]')).toBeNull()
             expect(extractCopyrightLines('Copyright (c) <year> <owner>')).toBeNull()
-            expect(extractCopyrightLines('Copyright Acme Corp. All rights reserved.')).toBeNull()
+            expect(extractCopyrightLines('Copyright (c) [fullname]')).toBeNull()
             expect(extractCopyrightLines('')).toBeNull()
         })
     })
@@ -39,6 +51,11 @@ describe('copyrightHeuristics', () => {
         it('returns null when nothing survives', () => {
             expect(selectCopyrights(['All rights reserved', 'Acme'])).toBeNull()
             expect(selectCopyrights([])).toBeNull()
+        })
+        it('stays strictly dated, unlike license-file extraction', () => {
+            // attribution candidate lists are noisy scrapes; the year is the
+            // signal there, so the undated relaxation does not apply
+            expect(selectCopyrights(['Copyright (c) Microsoft Corporation'])).toBeNull()
         })
     })
 
